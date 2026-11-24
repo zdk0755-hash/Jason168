@@ -52,7 +52,7 @@ input,select { width:100%; padding:7px 8px; border:1px solid var(--border); bord
     <p style="font-size:12px;color:#7F8C8D;margin-bottom:18px">请登录</p>
     <input type="text" id="loginUser" placeholder="账号" style="width:100%;padding:10px;border:1px solid #ccc;border-radius:6px;margin-bottom:10px;font-size:15px">
     <input type="password" id="loginPwd" placeholder="密码" style="width:100%;padding:10px;border:1px solid #ccc;border-radius:6px;margin-bottom:14px;font-size:15px">
-    <button onclick="doLogin()" style="width:100%;padding:10px;background:#1F4E79;color:white;border:none;border-radius:6px;font-size:15px;cursor:pointer">登录</button>
+    <button id="loginBtn" onclick="doLogin()" style="width:100%;padding:10px;background:#1F4E79;color:white;border:none;border-radius:6px;font-size:15px;cursor:pointer">登录</button>
     <p id="loginError" style="color:#C0392B;font-size:12px;margin-top:10px;display:none">账号或密码错误</p>
     <p style="margin-top:12px"><a href="#" onclick="resetLocalUsers();return false;" style="font-size:12px;color:#7F8C8D">登录失败？点此重置</a></p>
   </div>
@@ -109,13 +109,30 @@ function resetLocalUsers() {
   location.reload();
 }
 
-function doLogin() {
+async function doLogin() {
   const u = document.getElementById("loginUser").value.trim();
   const p = document.getElementById("loginPwd").value;
-  // 优先用本地账户，不等云端
+  const errEl = document.getElementById("loginError");
+  errEl.style.display = "none";
+  
+  // 先尝试从云端获取最新账户
+  if (SB_URL && SB_KEY) {
+    try {
+      const data = await sbFetch('app_settings?Key=eq.users&select=value');
+      if (data && data.length && data[0].value) {
+        const parsed = typeof data[0].value === 'string' ? JSON.parse(data[0].value) : data[0].value;
+        if (parsed && Object.keys(parsed).length > 0) {
+          USERS = parsed;
+        }
+      }
+    } catch(e) {}
+  }
+  
+  // 如果还是空，用默认
   if (!USERS || Object.keys(USERS).length === 0) {
     USERS = DEFAULT_USERS;
   }
+  
   const user = USERS[u];
   if (user && user.pwd === p) {
     currentUser = { username: u, ...user };
@@ -556,12 +573,19 @@ function today() { return new Date().toISOString().slice(0,10); }
 function getSegment(id) { return state.segments.find(s=>s.id===id)||{short:id,color:'#999'}; }
 function getRate(code) { 
   if (!code || code === 'CNY') return 1;
-  const c = state.currencies.find(x => x.code === code); 
+  const c = state.currencies.find(x => x.code === code);
+  const mga = state.currencies.find(x => x.code === 'MGA');
   if (!c) return 1;
   const r = Number(c.rate);
   if (isNaN(r) || r <= 0) return 1;
-  // inverted: rate means "1 CNY = X foreign", so 1 foreign = 1/X CNY
-  return c.inverted ? (1 / r) : r;
+  // 汇率以MGA为基准：1外币 = X MGA
+  // 转换为人民币：先算MGA，再除以MGA汇率
+  if (code === 'MGA') {
+    return mga && mga.rate > 0 ? (1 / mga.rate) : 0.001;
+  }
+  // 其他币种：1外币 = r MGA，1 MGA = 1/mga.rate CNY
+  const mgaRate = mga && mga.rate > 0 ? mga.rate : 690;
+  return r / mgaRate;
 }
 function toRMB(amt, cur) { 
   const a = Number(amt);
@@ -812,9 +836,9 @@ function renderExchange() {
     <div style="background:#E8F6F3;padding:12px;border-radius:8px;margin-bottom:12px">
       <div style="font-size:13px;font-weight:600;color:#148F77;margin-bottom:8px">收入（客户付出）</div>
       <div class="form-row">
-        <div><label>币种</label><select id="ex_in_cur">${state.currencies.map(c=>`<option value="${c.code}">${c.code} ${c.name}</option>`).join('')}</select></div>
-        <div><label>金额</label><input type="number" id="ex_in_amt" step="0.01" placeholder="客户付出的金额"></div>
-        <div><label>进货成本（人民币）</label><input type="number" id="ex_in_cost" step="0.01" placeholder="你拿到这笔的成本"></div>
+        <div><label>币种</label><select id="ex_in_cur" onchange="calcFromIncome()">${state.currencies.map(c=>`<option value="${c.code}">${c.code} ${c.name}</option>`).join('')}</select></div>
+        <div><label>金额</label><input type="number" id="ex_in_amt" step="0.01" placeholder="客户付出的金额" oninput="calcFromIncome()"></div>
+        <div><label>进货汇率</label><input type="number" id="ex_in_rate" step="0.01" placeholder="如690" oninput="calcFromIncome()"></div>
       </div>
     </div>
     <div style="background:#FDEBD0;padding:12px;border-radius:8px;margin-bottom:12px">
@@ -861,6 +885,19 @@ function renderRecentExchange() {
 }
 
 
+
+
+function calcFromIncome() {
+  const inCur = document.getElementById('ex_in_cur').value;
+  const inAmt = parseFloat(document.getElementById('ex_in_amt').value) || 0;
+  const inRate = parseFloat(document.getElementById('ex_in_rate').value) || 0;
+  // 如果收入是外币，自动算出支出人民币
+  if (inCur !== 'CNY' && inAmt > 0 && inRate > 0) {
+    const cnyAmt = inAmt / inRate;
+    document.getElementById('ex_out_cur').value = 'CNY';
+    document.getElementById('ex_out_amt').value = cnyAmt.toFixed(2);
+  }
+}
 
 function saveRateFromExchange() {
   const cur = document.getElementById('ex_out_cur').value;
@@ -1140,16 +1177,32 @@ function renderDaily() {
         <tbody>${items.map(t => {
           const seg = getSegment(t.segment);
           const r = toRMB(t.amount, t.currency);
+          const origAmt = t.currency === 'CNY' ? '' : ` <span style="color:#7F8C8D;font-size:11px">(${t.amount.toLocaleString()} ${t.currency})</span>`;
           return `<tr>
             <td><span class="segment-tag" style="background:${seg.color}22;color:${seg.color}">${seg.short}</span></td>
             <td><span class="badge ${t.type==='收入'?'badge-income':'badge-expense'}">${t.type}</span></td>
             <td style="font-size:12px">${t.desc||'-'}</td>
-            <td class="${t.type==='收入'?'positive':'negative'}">${formatMoney(r)}</td>
+            <td class="${t.type==='收入'?'positive':'negative'}">${formatMoney(r)}${origAmt}</td>
           </tr>`;
         }).join('')}</tbody>
       </table></div>
     </div>`;
   });
+  // 币种汇总
+  const curSummary = {};
+  txs.forEach(t => {
+    if (!t.currency || t.currency === 'CNY') return;
+    if (!curSummary[t.currency]) curSummary[t.currency] = {inc:0, exp:0};
+    if (t.type === '收入') curSummary[t.currency].inc += t.amount;
+    else curSummary[t.currency].exp += t.amount;
+  });
+  const curKeys = Object.keys(curSummary);
+  if (curKeys.length) {
+    html += `<div style="margin-top:12px;padding:10px;background:#f8f9fa;border-radius:6px;font-size:12px">
+      <b>外币汇总：</b>
+      ${curKeys.map(c => `${c} 收${curSummary[c].inc.toLocaleString()} / 支${curSummary[c].exp.toLocaleString()}`).join(' · ')}
+    </div>`;
+  }
   html += '</div>';
   return html;
 }
@@ -1199,15 +1252,24 @@ function renderMonthly() {
         <span>收入 ${formatMoney(mInc)} | 支出 ${formatMoney(mExp)} | 利润 <b>${formatMoney(mProfit)}</b></span>
       </div>
       <div style="overflow-x:auto"><table style="margin:0">
-        <thead><tr><th>日期</th><th>收入</th><th>支出</th><th>利润</th></tr></thead>
+        <thead><tr><th>日期</th><th>收入</th><th>支出</th><th>利润</th><th>外币明细</th></tr></thead>
         <tbody>${dayKeys.map(d => {
           const x = days[d];
           const p = x.inc - x.exp;
+          // 获取当天的外币明细
+          const dayTxs = txs.filter(t => t.date === d && t.currency !== 'CNY');
+          const curInfo = {};
+          dayTxs.forEach(t => {
+            if (!curInfo[t.currency]) curInfo[t.currency] = 0;
+            curInfo[t.currency] += t.type === '收入' ? t.amount : -t.amount;
+          });
+          const curStr = Object.entries(curInfo).map(([c,v]) => `${c}:${v>0?'+':''}${v.toLocaleString()}`).join(' ');
           return `<tr>
             <td>${d}</td>
             <td class="positive">${formatMoney(x.inc)}</td>
             <td class="negative">${formatMoney(x.exp)}</td>
             <td class="${p>=0?'positive':'negative'}">${formatMoney(p)}</td>
+            <td style="font-size:11px;color:#7F8C8D">${curStr}</td>
           </tr>`;
         }).join('')}</tbody>
       </table></div>
@@ -1228,7 +1290,7 @@ function renderSettings() {
         <thead><tr><th>币种</th><th>名称</th><th>汇率</th></tr></thead>
         <tbody>${state.currencies.map(c => `<tr>
           <td>${c.code}</td>
-          <td>${c.name}${c.inverted ? ' <span style="color:#E67E22;font-size:11px">(1人民币=?)</span>' : ''}</td>
+          <td>${c.name}${c.code==='MGA' ? ' <span style="color:#148F77;font-size:11px">(基准)</span>' : ' <span style="color:#E67E22;font-size:11px">(1外币=?MGA)</span>'}</td>
           <td><input type="number" step="0.01" value="${c.rate}" style="width:100px" onchange="updateRate('${c.code}', this.value)"></td>
           <td><button class="btn btn-sm btn-danger" onclick="deleteCurrency('${c.code}')">删</button></td>
         </tr>`).join('')}</tbody>
@@ -1495,14 +1557,33 @@ function toggleInvPerm(id) {
 
 function editUserSegments(id) {
   const current = USERS[id].segments || (USERS[id].segment ? [USERS[id].segment] : []);
-  const options = state.segments.map(s => s.id + ':' + s.short).join('\n');
-  const input = prompt('输入板块ID，多个用逗号分隔\n可选：' + state.segments.map(s=>s.id).join(', '), current.join(','));
-  if (input === null) return;
-  const segs = input.split(',').map(s => s.trim()).filter(s => s && state.segments.find(x => x.id === s));
+  const checks = state.segments.map(s => 
+    `<label style="display:block;margin:6px 0;font-size:14px">
+      <input type="checkbox" value="${s.id}" ${current.includes(s.id)?'checked':''}> ${s.short}
+    </label>`
+  ).join('');
+  
+  const modal = document.createElement('div');
+  modal.id = 'permModal';
+  modal.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;z-index:9999';
+  modal.innerHTML = `<div style="background:white;padding:20px;border-radius:10px;min-width:280px;max-width:90%">
+    <h3 style="margin-bottom:12px">设置 ${USERS[id].name || id} 的板块权限</h3>
+    <div id="permChecks">${checks}</div>
+    <div style="margin-top:16px;text-align:right">
+      <button onclick="document.getElementById('permModal').remove()" style="padding:8px 16px;margin-right:8px;border:1px solid #ccc;background:white;border-radius:4px;cursor:pointer">取消</button>
+      <button onclick="savePermModal('${id}')" style="padding:8px 16px;background:#1F4E79;color:white;border:none;border-radius:4px;cursor:pointer">保存</button>
+    </div>
+  </div>`;
+  document.body.appendChild(modal);
+}
+function savePermModal(id) {
+  const checks = document.querySelectorAll('#permChecks input:checked');
+  const segs = Array.from(checks).map(c => c.value);
   USERS[id].segments = segs;
   USERS[id].segment = segs[0] || null;
   USERS[id].role = segs.length ? 'staff' : 'admin';
   saveUsers();
+  document.getElementById('permModal').remove();
   alert('权限已更新');
   render();
 }
