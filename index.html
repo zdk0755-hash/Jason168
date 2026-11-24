@@ -198,6 +198,58 @@ let state = {
   fxSegments: JSON.parse(localStorage.getItem('fx_segments') || 'null') || ['exchange']
 };
 
+
+async function loadSettingsFromCloud() {
+  try {
+    // 板块
+    const segData = await sbFetch('app_settings?Key=eq.segments&select=value');
+    if (segData && segData.length && segData[0].value) {
+      const parsed = typeof segData[0].value === 'string' ? JSON.parse(segData[0].value) : segData[0].value;
+      if (parsed && parsed.length) {
+        state.segments = parsed;
+        localStorage.setItem('custom_segments', JSON.stringify(state.segments));
+      }
+    }
+    // 换汇板块配置
+    const fxData = await sbFetch('app_settings?Key=eq.fx_segments&select=value');
+    if (fxData && fxData.length && fxData[0].value) {
+      const parsed = typeof fxData[0].value === 'string' ? JSON.parse(fxData[0].value) : fxData[0].value;
+      if (parsed && parsed.length) {
+        state.fxSegments = parsed;
+        localStorage.setItem('fx_segments', JSON.stringify(state.fxSegments));
+      }
+    }
+    // 汇率
+    const rateData = await sbFetch('app_settings?Key=eq.rates&select=value');
+    if (rateData && rateData.length && rateData[0].value) {
+      const parsed = typeof rateData[0].value === 'string' ? JSON.parse(rateData[0].value) : rateData[0].value;
+      if (parsed && parsed.length) {
+        state.currencies = parsed;
+        localStorage.setItem('custom_rates', JSON.stringify(state.currencies));
+      }
+    }
+  } catch(e) { console.log('load settings', e); }
+}
+async function saveSettingsToCloud() {
+  try {
+    // 保存板块
+    await saveSetting('segments', state.segments);
+    // 保存换汇配置
+    await saveSetting('fx_segments', state.fxSegments);
+    // 保存汇率
+    await saveSetting('rates', state.currencies);
+  } catch(e) { console.log('save settings', e); }
+}
+async function saveSetting(key, value) {
+  const existing = await sbFetch('app_settings?Key=eq.' + key + '&select=Key');
+  const payload = { Key: key, value: JSON.stringify(value) };
+  if (existing && existing.length) {
+    await sbFetch('app_settings?Key=eq.' + key, { method: 'PATCH', body: JSON.stringify({ value: JSON.stringify(value) }) });
+  } else {
+    await sbFetch('app_settings', { method: 'POST', body: JSON.stringify(payload) });
+  }
+}
+
 async function loadInventoryFromCloud() {
   try {
     const data = await sbFetch('app_settings?Key=eq.inventory&select=value');
@@ -288,6 +340,7 @@ async function init() {
   setStatus('正在连接...');
   try {
     await loadUsersFromCloud();
+    await loadSettingsFromCloud();
     await loadInventoryFromCloud();
     await loadData();
     render();
@@ -1041,6 +1094,7 @@ function updateRate(code, val) {
   if (c) {
     c.rate = parseFloat(val) || 1;
     localStorage.setItem('custom_rates', JSON.stringify(state.currencies));
+    saveSettingsToCloud();
   }
 }
 
@@ -1053,6 +1107,7 @@ function toggleFxSeg(id, checked) {
     state.fxSegments = state.fxSegments.filter(x => x !== id);
   }
   localStorage.setItem('fx_segments', JSON.stringify(state.fxSegments));
+  saveSettingsToCloud();
 }
 
 function addSegment() {
@@ -1064,6 +1119,7 @@ function addSegment() {
   const colors = ['#1F4E79','#27AE60','#8E44AD','#E67E22','#148F77','#C0392B','#2980B9'];
   state.segments.push({ id, name, short, color: colors[state.segments.length % colors.length] });
   localStorage.setItem('custom_segments', JSON.stringify(state.segments));
+  saveSettingsToCloud();
   render();
 }
 
@@ -1086,6 +1142,7 @@ function deleteSegment(id) {
   if (!confirm('确定删除板块？')) return;
   state.segments = state.segments.filter(s => s.id !== id);
   localStorage.setItem('custom_segments', JSON.stringify(state.segments));
+  saveSettingsToCloud();
   render();
 }
 
@@ -1229,6 +1286,7 @@ function updateRate(code, val) {
     c.rate = parseFloat(val) || 1;
     // 汇率存在本地，刷新后保持（如需持久化可扩展）
     localStorage.setItem('custom_rates', JSON.stringify(state.currencies));
+    saveSettingsToCloud();
   }
 }
 function logout() {
