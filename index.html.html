@@ -1,0 +1,1214 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>多业务板块收支核算系统</title>
+<style>
+:root { --primary:#1F4E79; --green:#27AE60; --red:#C0392B; --gray:#F4F6F7; --border:#BFBFBF; --text:#2C3E50; --muted:#7F8C8D; }
+* { box-sizing:border-box; margin:0; padding:0; }
+body { font-family:"微软雅黑","PingFang SC",sans-serif; background:#f0f2f5; color:var(--text); }
+.header { background:var(--primary); color:white; padding:14px 16px; }
+.header h1 { font-size:18px; }
+.sync-status { font-size:12px; opacity:.9; margin-top:4px; }
+.nav { display:flex; gap:6px; flex-wrap:wrap; padding:10px 12px; background:white; border-bottom:1px solid #e0e0e0; overflow-x:auto; }
+.nav button { padding:7px 12px; border:none; background:var(--gray); border-radius:6px; cursor:pointer; font-size:13px; }
+.nav button.active { background:var(--primary); color:white; }
+.container { max-width:1100px; margin:0 auto; padding:12px; }
+.card { background:white; border-radius:10px; padding:14px; margin-bottom:12px; box-shadow:0 1px 3px rgba(0,0,0,.08); }
+.card h2 { font-size:15px; color:var(--primary); margin-bottom:10px; }
+.grid-3 { display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:10px; }
+.stat-card { background:var(--gray); border-radius:8px; padding:12px; text-align:center; }
+.stat-card .label { font-size:12px; color:var(--muted); }
+.stat-card .value { font-size:20px; font-weight:700; }
+.positive { color:var(--green); font-weight:600; }
+.negative { color:var(--red); font-weight:600; }
+table { width:100%; border-collapse:collapse; font-size:13px; }
+th,td { padding:7px 8px; text-align:left; border-bottom:1px solid #eee; }
+th { background:var(--primary); color:white; }
+.form-row { display:grid; grid-template-columns:repeat(auto-fit,minmax(120px,1fr)); gap:8px; margin-bottom:10px; }
+label { font-size:12px; color:var(--muted); display:block; margin-bottom:3px; }
+input,select { width:100%; padding:7px 8px; border:1px solid var(--border); border-radius:6px; font-size:13px; }
+.btn { padding:7px 14px; border:none; border-radius:6px; cursor:pointer; font-size:13px; }
+.btn-primary { background:var(--primary); color:white; }
+.btn-success { background:var(--green); color:white; }
+.btn-danger { background:var(--red); color:white; }
+.btn-sm { padding:3px 8px; font-size:12px; }
+.segment-tag { display:inline-block; padding:2px 7px; border-radius:4px; font-size:11px; }
+.badge { display:inline-block; padding:2px 6px; border-radius:4px; font-size:11px; }
+.badge-income { background:#D5F5E3; color:var(--green); }
+.badge-expense { background:#FADBD8; color:var(--red); }
+.setup-box { background:#FFF3CD; border:1px solid #FFC107; border-radius:8px; padding:16px; margin:20px auto; max-width:620px; }
+.error-box { background:#FADBD8; border:1px solid #E74C3C; border-radius:8px; padding:16px; margin:20px auto; max-width:620px; color:#C0392B; }
+.empty { text-align:center; padding:30px; color:var(--muted); }
+</style>
+</head>
+<body>
+
+
+<div id="loginGate" style="position:fixed;inset:0;background:#1F4E79;display:flex;align-items:center;justify-content:center;z-index:9999">
+  <div style="background:white;padding:28px;border-radius:12px;width:90%;max-width:340px;text-align:center">
+    <h2 style="color:#1F4E79;margin-bottom:6px">收支核算系统</h2>
+    <p style="font-size:12px;color:#7F8C8D;margin-bottom:18px">请登录</p>
+    <input type="text" id="loginUser" placeholder="账号" style="width:100%;padding:10px;border:1px solid #ccc;border-radius:6px;margin-bottom:10px;font-size:15px">
+    <input type="password" id="loginPwd" placeholder="密码" style="width:100%;padding:10px;border:1px solid #ccc;border-radius:6px;margin-bottom:14px;font-size:15px">
+    <button onclick="doLogin()" style="width:100%;padding:10px;background:#1F4E79;color:white;border:none;border-radius:6px;font-size:15px;cursor:pointer">登录</button>
+    <p id="loginError" style="color:#C0392B;font-size:12px;margin-top:10px;display:none">账号或密码错误</p>
+    <p style="margin-top:12px"><a href="#" onclick="resetLocalUsers();return false;" style="font-size:12px;color:#7F8C8D">登录失败？点此重置</a></p>
+  </div>
+</div>
+<script>
+// 用户账号配置（可自行修改）
+const DEFAULT_USERS = {
+  "admin": { pwd: "888888", role: "admin", segment: null, name: "管理员" },
+  "casino": { pwd: "casino123", role: "staff", segment: "casino", name: "赌场兑汇" },
+  "restaurant": { pwd: "rest123", role: "staff", segment: "restaurant", name: "中餐厅" },
+  "tobacco": { pwd: "tobacco123", role: "staff", segment: "tobacco", name: "烟酒" },
+  "express": { pwd: "express123", role: "staff", segment: "express", name: "快递" },
+  "exchange": { pwd: "exchange123", role: "staff", segment: "exchange", name: "兑换店" }
+};
+let USERS = JSON.parse(localStorage.getItem('custom_users') || 'null') || DEFAULT_USERS;
+
+async function loadUsersFromCloud() {
+  try {
+    const data = await sbFetch('app_settings?Key=eq.users&select=value');
+    if (data && data.length && data[0].value) {
+      const parsed = typeof data[0].value === 'string' ? JSON.parse(data[0].value) : data[0].value;
+      // 如果云端是空对象，使用默认账户
+      if (parsed && Object.keys(parsed).length > 0) {
+        USERS = parsed;
+        localStorage.setItem('custom_users', JSON.stringify(USERS));
+      }
+    }
+  } catch(e) { console.log('load users', e); }
+}
+async function saveUsersToCloud() {
+  try {
+    const existing = await sbFetch('app_settings?Key=eq.users&select=Key');
+    const payload = { Key: 'users', value: JSON.stringify(USERS) };
+    if (existing && existing.length) {
+      await sbFetch('app_settings?Key=eq.users', { method: 'PATCH', body: JSON.stringify({ value: JSON.stringify(USERS) }) });
+    } else {
+      await sbFetch('app_settings', { method: 'POST', body: JSON.stringify(payload) });
+    }
+  } catch(e) { console.log('save users', e); }
+}
+
+function saveUsers() { 
+  localStorage.setItem('custom_users', JSON.stringify(USERS)); 
+  saveUsersToCloud();
+}
+
+let currentUser = null;
+
+
+function resetLocalUsers() {
+  localStorage.removeItem('custom_users');
+  USERS = DEFAULT_USERS;
+  alert('已重置，请用 admin / 888888 登录');
+  location.reload();
+}
+
+function doLogin() {
+  const u = document.getElementById("loginUser").value.trim();
+  const p = document.getElementById("loginPwd").value;
+  // 如果 USERS 为空，使用默认
+  if (!USERS || Object.keys(USERS).length === 0) {
+    USERS = DEFAULT_USERS;
+  }
+  const user = USERS[u];
+  if (user && user.pwd === p) {
+    currentUser = { username: u, ...user };
+    sessionStorage.setItem("user", JSON.stringify(currentUser));
+    document.getElementById("loginGate").style.display = "none";
+    init();
+  } else {
+    document.getElementById("loginError").style.display = "block";
+  }
+}
+document.getElementById("loginPwd").addEventListener("keypress", e => { if(e.key==="Enter") doLogin(); });
+document.getElementById("loginUser").addEventListener("keypress", e => { if(e.key==="Enter") doLogin(); });
+
+// 页面加载时先从云端拉取账户
+(async function preloadUsers() {
+  if (SB_URL && SB_KEY) {
+    try {
+      const data = await sbFetch('app_settings?Key=eq.users&select=value');
+      if (data && data.length && data[0].value) {
+        const parsed = typeof data[0].value === 'string' ? JSON.parse(data[0].value) : data[0].value;
+        if (parsed && Object.keys(parsed).length > 0) {
+          USERS = parsed;
+          localStorage.setItem('custom_users', JSON.stringify(USERS));
+        }
+      }
+    } catch(e) {}
+  }
+})();
+
+// 恢复登录状态
+const saved = sessionStorage.getItem("user");
+if (saved) {
+  currentUser = JSON.parse(saved);
+  document.getElementById("loginGate").style.display = "none";
+}
+</script>
+
+
+<div class="header">
+  <h1>多业务板块收支核算系统</h1>
+  <div style="display:flex;justify-content:space-between;align-items:center">
+    <div class="sync-status" id="syncStatus">正在连接...</div>
+    <button onclick="logout()" style="background:transparent;border:1px solid rgba(255,255,255,.5);color:white;padding:4px 10px;border-radius:4px;font-size:12px;cursor:pointer">退出</button>
+  </div>
+</div>
+<div class="nav" id="navBar">
+  <button class="active" data-page="dashboard" onclick="showPage('dashboard')" id="navDashboard">仪表盘</button>
+  <button data-page="entry" onclick="showPage('entry')">录入收支</button>
+  <button data-page="exchange" onclick="showPage('exchange')">换汇录入</button>
+  <button data-page="ledger" onclick="showPage('ledger')">明细账本</button>
+  <button data-page="daily" onclick="showPage('daily')">每日汇总</button>
+  <button data-page="monthly" onclick="showPage('monthly')">每月汇总</button>
+  <button data-page="settings" onclick="showPage('settings')">设置</button>
+</div>
+<div class="container" id="app"></div>
+
+<script>
+const SB_URL = localStorage.getItem('sb_url') || 'https://rbszriuzozizeovexuxw.supabase.co';
+const SB_KEY = localStorage.getItem('sb_key') || 'sb_publishable_kPHoomdE3WmC5Wlnpr_RnQ_XQsnfdUP';
+let state = {
+  segments: JSON.parse(localStorage.getItem('custom_segments') || 'null') || [
+    {id:'casino',name:'海外合规赌场兑汇业务',short:'赌场兑汇',color:'#1F4E79'},
+    {id:'restaurant',name:'中餐厅',short:'中餐厅',color:'#27AE60'},
+    {id:'tobacco',name:'烟酒',short:'烟酒',color:'#8E44AD'},
+    {id:'express',name:'快递',short:'快递',color:'#E67E22'},
+    {id:'exchange',name:'线下兑换店',short:'兑换店',color:'#148F77'}
+  ],
+  currencies: [
+    {code:'CNY',name:'人民币',rate:1},{code:'USD',name:'美元',rate:7.245},
+    {code:'EUR',name:'欧元',rate:7.68},{code:'HKD',name:'港币',rate:0.932},
+    {code:'MGA',name:'马达加斯加阿里亚里',rate:617, inverted:true},
+  ],
+  categories: {
+    income:['销售收入','服务收入','兑汇差价收入','配送费收入','其他收入'],
+    expense:['采购成本','房租物业','员工工资','水电燃气','交通差旅','餐饮招待','办公费用','营销推广','税费支出','物流成本','其他支出']
+  },
+  transactions: [],
+  payMethods: ['现金','微信','支付宝','银行卡','其他'],
+  inventory: JSON.parse(localStorage.getItem('fx_inventory') || 'null') || { _total: {}, _segments: {} },
+  fxSegments: JSON.parse(localStorage.getItem('fx_segments') || 'null') || ['exchange']
+};
+function saveInventory() { localStorage.setItem('fx_inventory', JSON.stringify(state.inventory)); }
+function getSegInv(seg) {
+  if (!state.inventory._segments) state.inventory._segments = {};
+  if (!state.inventory._segments[seg]) state.inventory._segments[seg] = {};
+  return state.inventory._segments[seg];
+}
+function getTotalInv() {
+  const total = {};
+  const segs = state.inventory._segments || {};
+  Object.values(segs).forEach(inv => {
+    Object.entries(inv).forEach(([cur, amt]) => {
+      total[cur] = (total[cur] || 0) + amt;
+    });
+  });
+  return total;
+}
+let currentPage = 'dashboard';
+let currentSegmentFilter = 'all';
+
+
+function applyRoleUI() {
+  if (currentUser && currentUser.role === "staff") {
+    const dashBtn = document.getElementById("navDashboard");
+    if (dashBtn) dashBtn.style.display = "none";
+    // 如果当前在仪表盘，跳转到明细
+    if (currentPage === "dashboard") {
+      showPage("ledger");
+    }
+  }
+}
+
+function setStatus(t) { document.getElementById('syncStatus').textContent = t; }
+
+async function sbFetch(path, options={}) {
+  const url = SB_URL + '/rest/v1/' + path;
+  const headers = {
+    'apikey': SB_KEY,
+    'Authorization': 'Bearer ' + SB_KEY,
+    'Content-Type': 'application/json',
+    'Prefer': 'return=representation',
+    ...(options.headers||{})
+  };
+  const res = await fetch(url, { ...options, headers });
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(err || res.statusText);
+  }
+  if (res.status === 204) return null;
+  return res.json();
+}
+
+
+// 恢复自定义汇率
+const savedRates = localStorage.getItem('custom_rates');
+if (savedRates) {
+  try { state.currencies = JSON.parse(savedRates); } catch(e) {}
+}
+
+async function init() {
+  if (!SB_URL || !SB_KEY) { showSetup(); setStatus('未配置'); return; }
+  setStatus('正在连接...');
+  try {
+    await loadUsersFromCloud();
+    await loadData();
+    render();
+    setStatus('已连接 · 自动同步');
+    applyRoleUI();
+    // 简单轮询同步（每15秒）
+    setInterval(loadData, 30000);
+  } catch(e) {
+    showError(e.message);
+    setStatus('连接失败');
+  }
+}
+
+async function loadData() {
+  const data = await sbFetch('transactions?select=*&order=date.desc');
+  state.transactions = (data||[]).map(r => ({
+    id: r.id, date: r.date, segment: r.segment, type: r.type,
+    category: r.category, currency: r.currency, amount: Number(r.amount),
+    pay: r.pay, desc: r.desc, expressType: r.express_type,
+    weight: r.weight ? Number(r.weight) : 0, pricePerKg: r.price_per_kg ? Number(r.price_per_kg) : 0
+  }));
+  // 如果用户正在录入页面，不自动刷新界面，避免清空输入
+  const formPages = ['entry', 'exchange'];
+  if (currentPage && !formPages.includes(currentPage)) {
+    render();
+  }
+}
+
+function showSetup() {
+  document.getElementById('app').innerHTML = `
+    <div class="setup-box">
+      <h3>配置云端</h3>
+      <label>Project URL</label>
+      <input type="text" id="cfg_url" value="${SB_URL}" placeholder="https://xxxx.supabase.co" style="margin:6px 0">
+      <label>anon Key</label>
+      <input type="text" id="cfg_key" value="${SB_KEY}" placeholder="密钥" style="margin:6px 0">
+      <button class="btn btn-primary" onclick="saveConfig()">保存并连接</button>
+    </div>`;
+}
+
+function showError(msg) {
+  document.getElementById('app').innerHTML = `
+    <div class="error-box">
+      <h3>连接失败</h3>
+      <p style="margin:8px 0;font-size:13px;word-break:break-all">${msg}</p>
+      <button class="btn btn-primary" onclick="resetConfig()">重新配置</button>
+    </div>`;
+}
+
+function saveConfig() {
+  const url = document.getElementById('cfg_url').value.trim().replace(/\/$/,'');
+  const key = document.getElementById('cfg_key').value.trim();
+  if (!url || !key) { alert('请填写'); return; }
+  localStorage.setItem('sb_url', url);
+  localStorage.setItem('sb_key', key);
+  location.reload();
+}
+
+async function addTransaction() {
+  const date = document.getElementById('e_date').value;
+  const segment = document.getElementById('e_seg').value;
+  const type = document.getElementById('e_type').value;
+  const category = document.getElementById('e_cat').value;
+  const currency = document.getElementById('e_cur').value;
+  const amount = parseFloat(document.getElementById('e_amt').value);
+  const pay = document.getElementById('e_pay').value;
+  const desc = document.getElementById('e_desc').value.trim();
+  
+  // 更新库存：收入增加，支出减少
+  if (segment && currency && !isNaN(amount)) {
+    const segInv = getSegInv(segment);
+    if (type === '收入') {
+      segInv[currency] = (segInv[currency] || 0) + amount;
+    } else {
+      segInv[currency] = (segInv[currency] || 0) - amount;
+    }
+    saveInventory();
+  }
+  const expressType = document.getElementById('e_express_type')?.value || '';
+  const weight = parseFloat(document.getElementById('e_weight')?.value) || null;
+  const pricePerKg = parseFloat(document.getElementById('e_price_per_kg')?.value) || null;
+  if (!date || !segment || !type || !currency || isNaN(amount) || amount <= 0) {
+    alert('请填写日期、板块、类型、币种和金额'); return;
+  }
+  if (!category) category = type === '收入' ? '其他收入' : '其他支出';
+  try {
+    await sbFetch('transactions', {
+      method: 'POST',
+      body: JSON.stringify({
+        date, segment, type, category, currency, amount, pay, desc,
+        express_type: expressType, weight, price_per_kg: pricePerKg
+      })
+    });
+    document.getElementById('e_amt').value = '';
+    document.getElementById('e_desc').value = '';
+    await loadData();
+  } catch(e) { alert('保存失败：' + e.message); }
+}
+
+
+
+function markError(id) {
+  const reason = prompt('请简要说明错误原因：');
+  if (!reason) return;
+  const t = state.transactions.find(x => x.id == id);
+  if (!t) return;
+  const newDesc = '[待审] ' + reason + ' | ' + (t.desc || '');
+  sbFetch('transactions?id=eq.' + id, {
+    method: 'PATCH',
+    body: JSON.stringify({ desc: newDesc })
+  }).then(() => {
+    alert('已标注，等待管理员审核');
+    loadData();
+  }).catch(e => alert('标注失败'));
+}
+
+function editTx(id) {
+  const t = state.transactions.find(x => x.id == id);
+  if (!t) return;
+  const newAmt = prompt('修改金额（当前：' + t.amount + '）：', t.amount);
+  if (newAmt === null) return;
+  const amt = parseFloat(newAmt);
+  if (isNaN(amt) || amt <= 0) { alert('金额无效'); return; }
+  const newDesc = prompt('修改摘要（当前：' + (t.desc||'') + '）：', t.desc || '');
+  if (newDesc === null) return;
+  
+  sbFetch('transactions?id=eq.' + id, {
+    method: 'PATCH',
+    body: JSON.stringify({ amount: amt, desc: newDesc })
+  }).then(() => {
+    alert('已修改');
+    loadData();
+  }).catch(e => alert('修改失败：' + e.message));
+}
+
+async function deleteTx(id) {
+  if (!confirm('确定撤单？此操作不可恢复')) return;
+  const t = state.transactions.find(x => x.id == id);
+  try {
+    await sbFetch('transactions?id=eq.' + id, { method: 'DELETE' });
+    // 撤单时反向调整库存
+    if (t && t.segment) {
+      const segInv = getSegInv(t.segment);
+      // 换汇记录：从摘要解析原始币种数量并反向
+      if (t.desc && t.desc.includes('[换汇]') && t.desc.includes('IN:')) {
+        const inMatch = t.desc.match(/IN:([\d.]+):(\w+)/);
+        const outMatch = t.desc.match(/OUT:([\d.]+):(\w+)/);
+        if (inMatch) {
+          const amt = parseFloat(inMatch[1]), cur = inMatch[2];
+          segInv[cur] = (segInv[cur] || 0) - amt;
+        }
+        if (outMatch) {
+          const amt = parseFloat(outMatch[1]), cur = outMatch[2];
+          segInv[cur] = (segInv[cur] || 0) + amt;
+        }
+      } else if (t.currency) {
+        // 普通记录
+        if (t.type === '收入') {
+          segInv[t.currency] = (segInv[t.currency] || 0) - t.amount;
+        } else {
+          segInv[t.currency] = (segInv[t.currency] || 0) + t.amount;
+        }
+      }
+      saveInventory();
+    }
+    await loadData();
+    render();
+  } catch(e) { alert('删除失败：' + e.message); }
+}
+
+
+function getUserSegments() {
+  if (!currentUser) return [];
+  if (currentUser.role === "admin") return state.segments.map(s => s.id);
+  // 支持 segments 数组或旧的单 segment
+  if (currentUser.segments && currentUser.segments.length) return currentUser.segments;
+  if (currentUser.segment) return [currentUser.segment];
+  return [];
+}
+function getVisibleTransactions() {
+  if (!currentUser || currentUser.role === "admin") return state.transactions;
+  const segs = getUserSegments();
+  return state.transactions.filter(t => segs.includes(t.segment));
+}
+function canEditSegment(seg) {
+  if (!currentUser || currentUser.role === "admin") return true;
+  return getUserSegments().includes(seg);
+}
+function canAdjustInv() {
+  if (!currentUser) return false;
+  if (currentUser.role === "admin") return true;
+  return currentUser.canInventory === true;
+}
+
+function formatMoney(n) { return n==null||isNaN(n)?'-':'¥'+Number(n).toLocaleString('zh-CN',{minimumFractionDigits:2,maximumFractionDigits:2}); }
+function today() { return new Date().toISOString().slice(0,10); }
+function getSegment(id) { return state.segments.find(s=>s.id===id)||{short:id,color:'#999'}; }
+function getRate(code) { 
+  if (!code || code === 'CNY') return 1;
+  const c = state.currencies.find(x => x.code === code); 
+  if (!c) return 1;
+  const r = Number(c.rate);
+  if (isNaN(r) || r <= 0) return 1;
+  // inverted: rate means "1 CNY = X foreign", so 1 foreign = 1/X CNY
+  return c.inverted ? (1 / r) : r;
+}
+function toRMB(amt, cur) { 
+  const a = Number(amt);
+  if (isNaN(a)) return 0;
+  return a * getRate(cur); 
+}
+
+function showPage(page) {
+  currentPage = page;
+  document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active', b.dataset.page===page));
+  render();
+}
+
+function render() {
+  const app = document.getElementById('app');
+  if (currentPage==='dashboard') app.innerHTML = renderDashboard();
+  else if (currentPage==='entry') app.innerHTML = renderEntry();
+  else if (currentPage==='exchange') app.innerHTML = renderExchange();
+  else if (currentPage==='ledger') app.innerHTML = renderLedger();
+  else if (currentPage==='daily') app.innerHTML = renderDaily();
+  else if (currentPage==='monthly') app.innerHTML = renderMonthly();
+  else if (currentPage==='settings') app.innerHTML = renderSettings();
+}
+
+
+function renderExchange() {
+  setTimeout(calcOutCost, 50);
+  // 换汇板块：使用设置中配置的列表
+  const fxSegs = state.segments.filter(s => (state.fxSegments || []).includes(s.id));
+  const allowed = currentUser && currentUser.role === "staff" 
+    ? fxSegs.filter(s => getUserSegments().includes(s.id))
+    : fxSegs;
+  const segOptions = allowed.length ? allowed : fxSegs;
+  
+  const totalInv = getTotalInv();
+  const totalHtml = Object.entries(totalInv).filter(([k,v])=>v!==0)
+    .map(([k,v]) => `<span style="display:inline-block;margin:3px 6px;padding:3px 8px;background:#D5F5E3;border-radius:4px;font-size:12px">${k}: ${Number(v).toLocaleString()}</span>`).join('') || '<span style="color:#999">无</span>';
+  
+  const segInvHtml = state.segments.map(s => {
+    const inv = (state.inventory._segments || {})[s.id] || {};
+    const items = Object.entries(inv).filter(([k,v])=>v!==0)
+      .map(([k,v]) => `${k}:${Number(v).toLocaleString()}`).join(' · ');
+    return items ? `<div style="font-size:12px;margin:4px 0"><b>${s.short}</b>：${items}</div>` : '';
+  }).join('');
+
+  const invHtml = `<div style="margin-bottom:8px"><b>总库存</b><br>${totalHtml}</div>
+    <div><b>各板块</b><br>${segInvHtml || '<span style="color:#999">暂无</span>'}</div>`;
+
+  return `<div class="card">
+    <h2>货币库存</h2>
+    <div>${invHtml}</div>
+    <p style="font-size:11px;color:#7F8C8D;margin-top:6px">正数为持有，负数为透支。只有外币换回人民币才形成实际利润。</p>
+    ${canAdjustInv() ? `<div class="form-row" style="margin-top:10px">
+      <div><label>板块</label><select id="inv_seg2">${
+        state.segments.filter(s => (state.fxSegments||[]).includes(s.id))
+          .map(s=>`<option value="${s.id}">${s.short}</option>`).join('')
+      }</select></div>
+      <div><label>币种</label><select id="inv_cur2">${state.currencies.map(c=>`<option value="${c.code}">${c.code}</option>`).join('')}</select></div>
+      <div><label>设为数量</label><input type="number" id="inv_set2" step="0.01" placeholder="直接填目标数量"></div>
+      <div style="align-self:end"><button class="btn btn-primary" onclick="setInventory()">设置</button></div>
+    </div>
+    <p style="font-size:11px;color:#999;margin-top:4px">直接填写该板块该币种的正确库存数量</p>` : ''}
+  </div>
+  <div class="card">
+    <h2>换汇录入</h2>
+    <p style="font-size:12px;color:#7F8C8D;margin-bottom:12px">记录一笔换汇交易，自动计算利润并归入对应板块</p>
+    <div class="form-row">
+      <div><label>日期</label><input type="date" id="ex_date" value="${today()}"></div>
+      <div><label>归属板块</label><select id="ex_seg">
+        ${segOptions.map(s=>`<option value="${s.id}">${s.short}</option>`).join('')}
+      </select></div>
+      <div><label>支付方式</label><select id="ex_pay">
+        <option>微信</option><option>现金</option><option>银行转账</option><option>支付宝</option><option>其他</option>
+      </select></div>
+    </div>
+    <div style="background:#E8F6F3;padding:12px;border-radius:8px;margin-bottom:12px">
+      <div style="font-size:13px;font-weight:600;color:#148F77;margin-bottom:8px">收入（客户付出）</div>
+      <div class="form-row">
+        <div><label>币种</label><select id="ex_in_cur">${state.currencies.map(c=>`<option value="${c.code}">${c.code} ${c.name}</option>`).join('')}</select></div>
+        <div><label>金额</label><input type="number" id="ex_in_amt" step="0.01" placeholder="客户付出的金额"></div>
+        <div><label>进货成本（人民币）</label><input type="number" id="ex_in_cost" step="0.01" placeholder="你拿到这笔的成本"></div>
+      </div>
+    </div>
+    <div style="background:#FDEBD0;padding:12px;border-radius:8px;margin-bottom:12px">
+      <div style="font-size:13px;font-weight:600;color:#E67E22;margin-bottom:8px">支出（你付出）</div>
+      <div class="form-row">
+        <div><label>币种</label><select id="ex_out_cur" onchange="calcOutCost()">${state.currencies.map(c=>`<option value="${c.code}" ${c.code==='MGA'?'selected':''}>${c.code} ${c.name}</option>`).join('')}</select></div>
+        <div><label>金额</label><input type="number" id="ex_out_amt" step="0.01" placeholder="你付出的金额" oninput="calcOutCost()"></div>
+        <div><label>当日汇率（来自设置）</label><input type="number" id="ex_rate" step="0.01" readonly style="background:#f0f0f0" title="由管理员在设置中修改"></div>
+        <div><label>出货成本（自动）</label><input type="number" id="ex_out_cost" step="0.01" placeholder="自动计算" readonly style="background:#f5f5f5"></div>
+      </div>
+    </div>
+    <div class="form-row">
+      <div><label>摘要</label><input type="text" id="ex_desc" placeholder="如：客户换美元"></div>
+      <div style="align-self:end"><button class="btn btn-success" onclick="saveExchange()">保存换汇记录</button></div>
+    </div>
+    <div id="ex_preview" style="margin-top:12px;padding:10px;background:#F4F6F7;border-radius:6px;font-size:13px;display:none"></div>
+  </div>
+  <div class="card">
+    <h2>最近换汇记录</h2>
+    ${renderRecentExchange()}
+  </div>`;
+}
+
+function renderRecentExchange() {
+  const list = getVisibleTransactions()
+    .filter(t => t.desc && t.desc.includes('[换汇]'))
+    .sort((a,b) => b.date.localeCompare(a.date))
+    .slice(0, 10);
+  if (!list.length) return '<div class="empty">暂无换汇记录</div>';
+  return `<div style="overflow-x:auto"><table>
+    <thead><tr><th>日期</th><th>板块</th><th>摘要</th><th>人民币利润</th></tr></thead>
+    <tbody>${list.map(t => {
+      const seg = getSegment(t.segment);
+      const rmb = toRMB(t.amount, t.currency);
+      const profit = t.type === '收入' ? rmb : -rmb;
+      return `<tr>
+        <td>${t.date}</td>
+        <td><span class="segment-tag" style="background:${seg.color}22;color:${seg.color}">${seg.short}</span></td>
+        <td>${t.desc}</td>
+        <td class="${profit>=0?'positive':'negative'}">${formatMoney(profit)}</td>
+      </tr>`;
+    }).join('')}</tbody>
+  </table></div>`;
+}
+
+
+function calcOutCost() {
+  const cur = document.getElementById('ex_out_cur').value;
+  const c = state.currencies.find(x => x.code === cur);
+  const rateEl = document.getElementById('ex_rate');
+  // 从设置中读取汇率
+  if (c && c.inverted) {
+    rateEl.value = c.rate;
+  } else if (c && c.rate > 0) {
+    rateEl.value = (1 / c.rate).toFixed(2);
+  } else {
+    rateEl.value = '';
+  }
+  const amt = parseFloat(document.getElementById('ex_out_amt').value) || 0;
+  const rate = parseFloat(rateEl.value) || 0;
+  const costEl = document.getElementById('ex_out_cost');
+  if (amt > 0 && rate > 0) {
+    costEl.value = (amt / rate).toFixed(2);
+  } else {
+    costEl.value = '';
+  }
+}
+
+async function saveExchange() {
+  const date = document.getElementById('ex_date').value;
+  const seg = document.getElementById('ex_seg').value;
+  const pay = document.getElementById('ex_pay').value;
+  const inCur = document.getElementById('ex_in_cur').value;
+  const inAmt = parseFloat(document.getElementById('ex_in_amt').value) || 0;
+  const inCost = parseFloat(document.getElementById('ex_in_cost').value) || 0;
+  const outCur = document.getElementById('ex_out_cur').value;
+  const outAmt = parseFloat(document.getElementById('ex_out_amt').value) || 0;
+  const outCost = parseFloat(document.getElementById('ex_out_cost').value) || 0;
+  const desc = document.getElementById('ex_desc').value.trim() || '换汇';
+
+  if (!date || !seg || inAmt <= 0 || outAmt <= 0) {
+    alert('请填写日期、板块、收入金额和支出金额');
+    return;
+  }
+
+  // 利润 = 收入人民币 - 出货成本
+  // 收入按汇率折算成人民币，出货成本直接用填写的人民币金额
+  const inRMB = inAmt * getRate(inCur);
+  const profit = inRMB - outCost;
+
+  const fullDesc = `[换汇] ${desc} | IN:${inAmt}:${inCur} OUT:${outAmt}:${outCur} | 利润${profit.toFixed(0)}`;
+
+  // 更新该板块库存
+  const segInv = getSegInv(seg);
+  segInv[inCur] = (segInv[inCur] || 0) + inAmt;
+  segInv[outCur] = (segInv[outCur] || 0) - outAmt;
+  saveInventory();
+
+  try {
+    // 写入利润记录
+    await sbFetch('transactions', {
+      method: 'POST',
+      body: JSON.stringify({
+        date, segment: seg, type: profit >= 0 ? '收入' : '支出',
+        category: '兑汇差价收入', currency: 'CNY',
+        amount: Math.abs(profit), pay, desc: fullDesc
+      })
+    });
+    alert('换汇记录已保存，利润：' + formatMoney(profit));
+    document.getElementById('ex_in_amt').value = '';
+    document.getElementById('ex_out_amt').value = '';
+    document.getElementById('ex_in_cost').value = '';
+    document.getElementById('ex_out_cost').value = '';
+    document.getElementById('ex_desc').value = '';
+    await loadData();
+    render();
+  } catch(e) {
+    alert('保存失败：' + e.message);
+  }
+}
+
+
+function renderPendingReview() {
+  const pending = state.transactions.filter(t => t.desc && t.desc.includes('[待审]'));
+  if (!pending.length) return '';
+  return `<div class="card" style="border:2px solid #F39C12">
+    <h2 style="color:#E67E22">待审核订单（${pending.length}）</h2>
+    <div style="overflow-x:auto"><table>
+      <thead><tr><th>日期</th><th>板块</th><th>金额</th><th>说明</th><th>操作</th></tr></thead>
+      <tbody>${pending.map(t => {
+        const seg = getSegment(t.segment);
+        return `<tr>
+          <td>${t.date}</td>
+          <td>${seg.short}</td>
+          <td>${t.amount} ${t.currency}</td>
+          <td style="font-size:12px">${t.desc}</td>
+          <td>
+            <button class="btn btn-sm" onclick="editTx('${t.id}')">修改</button>
+            <button class="btn btn-sm btn-danger" onclick="deleteTx('${t.id}')">撤销</button>
+            <button class="btn btn-sm" onclick="clearMark('${t.id}')">忽略</button>
+          </td>
+        </tr>`;
+      }).join('')}</tbody>
+    </table></div>
+  </div>`;
+}
+function clearMark(id) {
+  const t = state.transactions.find(x => x.id == id);
+  if (!t) return;
+  const newDesc = (t.desc || '').replace(/\[待审\][^|]*\|\s*/, '');
+  sbFetch('transactions?id=eq.' + id, {
+    method: 'PATCH',
+    body: JSON.stringify({ desc: newDesc })
+  }).then(() => loadData()).catch(() => {});
+}
+
+function renderDashboard() {
+  const all = getVisibleTransactions();
+  const totalInc = all.filter(t=>t.type==='收入').reduce((s,t)=>s+toRMB(t.amount,t.currency),0);
+  const totalExp = all.filter(t=>t.type==='支出').reduce((s,t)=>s+toRMB(t.amount,t.currency),0);
+  const profit = totalInc - totalExp;
+  const ym = new Date().toISOString().slice(0,7);
+  const mTx = all.filter(t=>t.date.startsWith(ym));
+  const mInc = mTx.filter(t=>t.type==='收入').reduce((s,t)=>s+toRMB(t.amount,t.currency),0);
+  const mExp = mTx.filter(t=>t.type==='支出').reduce((s,t)=>s+toRMB(t.amount,t.currency),0);
+  let segHtml = state.segments.map(seg => {
+    const txs = all.filter(t=>t.segment===seg.id);
+    const inc = txs.filter(t=>t.type==='收入').reduce((s,t)=>s+toRMB(t.amount,t.currency),0);
+    const exp = txs.filter(t=>t.type==='支出').reduce((s,t)=>s+toRMB(t.amount,t.currency),0);
+    const p = inc - exp;
+    return `<tr><td><span class="segment-tag" style="background:${seg.color}22;color:${seg.color}">${seg.short}</span></td>
+      <td class="positive">${formatMoney(inc)}</td><td class="negative">${formatMoney(exp)}</td>
+      <td class="${p>=0?'positive':'negative'}">${formatMoney(p)}</td><td>${txs.length}</td></tr>`;
+  }).join('');
+  return `<div class="card"><h2>整体概况</h2><div class="grid-3">
+    <div class="stat-card"><div class="label">累计收入</div><div class="value positive">${formatMoney(totalInc)}</div></div>
+    <div class="stat-card"><div class="label">累计支出</div><div class="value negative">${formatMoney(totalExp)}</div></div>
+    <div class="stat-card"><div class="label">累计利润</div><div class="value ${profit>=0?'positive':'negative'}">${formatMoney(profit)}</div></div>
+  </div></div>
+  <div class="card"><h2>本月（${ym}）</h2><div class="grid-3">
+    <div class="stat-card"><div class="label">收入</div><div class="value positive">${formatMoney(mInc)}</div></div>
+    <div class="stat-card"><div class="label">支出</div><div class="value negative">${formatMoney(mExp)}</div></div>
+    <div class="stat-card"><div class="label">利润</div><div class="value ${(mInc-mExp)>=0?'positive':'negative'}">${formatMoney(mInc-mExp)}</div></div>
+  </div></div>
+  ${currentUser && currentUser.role==='admin' ? renderPendingReview() : ''}
+  <div class="card"><h2>各板块</h2><div style="overflow-x:auto"><table>
+    <thead><tr><th>板块</th><th>收入</th><th>支出</th><th>利润</th><th>笔数</th></tr></thead>
+    <tbody>${segHtml}</tbody></table></div></div>`;
+}
+
+function renderEntry() {
+  const defaultCats = state.categories.income;
+  return `<div class="card"><h2>录入收支</h2>
+    <div class="form-row">
+      <div><label>日期</label><input type="date" id="e_date" value="${today()}"></div>
+      <div><label>板块</label><select id="e_seg" onchange="toggleExpress()">${
+    (currentUser && currentUser.role==="staff"
+      ? state.segments.filter(s => getUserSegments().includes(s.id))
+      : state.segments
+    ).map(s=>`<option value="${s.id}">${s.name}</option>`).join('')
+  }</select></div>
+      <div><label>类型</label><select id="e_type" onchange="updateCat()"><option>收入</option><option>支出</option></select></div>
+      <div><label>分类</label><select id="e_cat">${defaultCats.map(c=>`<option>${c}</option>`).join('')}</select></div>
+    </div>
+    <div class="form-row">
+      <div><label>币种</label><select id="e_cur">${state.currencies.map(c=>`<option value="${c.code}">${c.code}</option>`).join('')}</select></div>
+      <div><label>金额</label><input type="number" id="e_amt" step="0.01"></div>
+      <div><label>支付</label><select id="e_pay">${state.payMethods.map(p=>`<option>${p}</option>`).join('')}</select></div>
+      <div><label>摘要</label><input type="text" id="e_desc"></div>
+    </div>
+    <div id="expressBox" style="display:none;background:#FFF8E1;padding:10px;border-radius:8px;margin-bottom:10px">
+      <div style="font-size:12px;color:#E67E22">快递专属</div>
+      <div class="form-row">
+        <div><label>运输类型</label><select id="e_express_type"><option value="">请选择</option><option>普通空运</option><option>快速空运</option><option>回国货物</option></select></div>
+        <div><label>重量kg</label><input type="number" id="e_weight" step="0.01"></div>
+        <div><label>单价/kg</label><input type="number" id="e_price_per_kg" step="0.01"></div>
+      </div>
+    </div>
+    <button class="btn btn-success" onclick="addTransaction()">保存</button>
+  </div>`;
+}
+
+function toggleExpress() {
+  const seg = document.getElementById('e_seg')?.value;
+  const box = document.getElementById('expressBox');
+  if (box) box.style.display = seg==='express' ? 'block' : 'none';
+}
+function updateCat() {
+  const type = document.getElementById('e_type')?.value || '收入';
+  const sel = document.getElementById('e_cat');
+  if (!sel) return;
+  const cats = type==='收入' ? state.categories.income : state.categories.expense;
+  sel.innerHTML = cats.map(c=>`<option>${c}</option>`).join('');
+}
+
+function renderLedger() {
+  let list = getVisibleTransactions();
+  if (currentSegmentFilter!=='all') list = list.filter(t=>t.segment===currentSegmentFilter);
+  list.sort((a,b)=>b.date.localeCompare(a.date));
+  const opts = `<option value="all">全部</option>` + state.segments.map(s=>`<option value="${s.id}" ${currentSegmentFilter===s.id?'selected':''}>${s.short}</option>`).join('');
+  if (!list.length) return `<div class="card"><div class="empty">暂无记录</div></div>`;
+  return `<div class="card"><div style="margin-bottom:10px"><select onchange="currentSegmentFilter=this.value;render()">${opts}</select></div>
+    <div style="overflow-x:auto"><table><thead><tr><th>日期</th><th>板块</th><th>类型</th><th>摘要</th><th>金额</th><th>人民币</th><th>操作</th></tr></thead>
+    <tbody>${list.map(t=>{
+      const seg = getSegment(t.segment);
+      const rmb = toRMB(t.amount, t.currency);
+      return `<tr><td>${t.date}</td><td><span class="segment-tag" style="background:${seg.color}22;color:${seg.color}">${seg.short}</span></td>
+        <td><span class="badge ${t.type==='收入'?'badge-income':'badge-expense'}">${t.type}</span></td>
+        <td>${t.desc||t.category}</td><td>${t.amount} ${t.currency}</td>
+        <td class="${t.type==='收入'?'positive':'negative'}">${formatMoney(rmb)}</td>
+        <td>
+          ${currentUser && currentUser.role==='admin' 
+            ? `<button class="btn btn-sm" onclick="editTx('${t.id}')">改</button>
+               <button class="btn btn-sm btn-danger" onclick="deleteTx('${t.id}')">撤单</button>`
+            : `<button class="btn btn-sm" style="background:#F39C12;color:white" onclick="markError('${t.id}')">标错</button>`
+          }
+          ${t.desc && t.desc.includes('[待审]') ? '<span style="color:#E67E22;font-size:11px">待审</span>' : ''}
+        </td></tr>`;
+    }).join('')}</tbody></table></div></div>`;
+}
+
+function renderDaily() {
+  const byDate = {};
+  state.transactions.forEach(t => {
+    if (!t.date) return;
+    if (!byDate[t.date]) byDate[t.date] = {inc:0,exp:0};
+    const r = toRMB(t.amount, t.currency);
+    if (isNaN(r)) return;
+    if (t.type==='收入') byDate[t.date].inc += r; else byDate[t.date].exp += r;
+  });
+  const dates = Object.keys(byDate).sort().reverse();
+  if (!dates.length) return `<div class="card"><div class="empty">暂无</div></div>`;
+  return `<div class="card"><h2>每日</h2><div style="overflow-x:auto"><table>
+    <thead><tr><th>日期</th><th>收入</th><th>支出</th><th>利润</th></tr></thead>
+    <tbody>${dates.map(d=>{const x=byDate[d];const p=x.inc-x.exp;
+      return `<tr><td>${d}</td><td class="positive">${formatMoney(x.inc)}</td><td class="negative">${formatMoney(x.exp)}</td><td class="${p>=0?'positive':'negative'}">${formatMoney(p)}</td></tr>`;
+    }).join('')}</tbody></table></div></div>`;
+}
+
+function renderMonthly() {
+  const byM = {};
+  state.transactions.forEach(t => {
+    if (!t.date) return;
+    const m = t.date.slice(0,7);
+    if (!byM[m]) byM[m] = {inc:0,exp:0};
+    const r = toRMB(t.amount, t.currency);
+    if (isNaN(r)) return;
+    if (t.type==='收入') byM[m].inc += r; else byM[m].exp += r;
+  });
+  const months = Object.keys(byM).sort().reverse();
+  if (!months.length) return `<div class="card"><div class="empty">暂无</div></div>`;
+  return `<div class="card"><h2>每月</h2><div style="overflow-x:auto"><table>
+    <thead><tr><th>月份</th><th>收入</th><th>支出</th><th>利润</th></tr></thead>
+    <tbody>${months.map(m=>{const x=byM[m];const p=x.inc-x.exp;
+      return `<tr><td>${m}</td><td class="positive">${formatMoney(x.inc)}</td><td class="negative">${formatMoney(x.exp)}</td><td class="${p>=0?'positive':'negative'}">${formatMoney(p)}</td></tr>`;
+    }).join('')}</tbody></table></div></div>`;
+}
+
+function renderSettings() {
+  const isAdmin = currentUser && currentUser.role === "admin";
+  let html = "";
+
+  if (isAdmin) {
+    // 汇率
+    html += `<div class="card"><h2>汇率设置</h2>
+      <div style="overflow-x:auto"><table>
+        <thead><tr><th>币种</th><th>名称</th><th>汇率</th></tr></thead>
+        <tbody>${state.currencies.map(c => `<tr>
+          <td>${c.code}</td>
+          <td>${c.name}${c.inverted ? ' <span style="color:#E67E22;font-size:11px">(1人民币=?)</span>' : ''}</td>
+          <td><input type="number" step="0.01" value="${c.rate}" style="width:100px" onchange="updateRate('${c.code}', this.value)"></td>
+          <td><button class="btn btn-sm btn-danger" onclick="deleteCurrency('${c.code}')">删</button></td>
+        </tr>`).join('')}</tbody>
+        </table>
+        <div class="form-row" style="margin-top:10px">
+          <div><label>币种代码</label><input type="text" id="newCurCode" placeholder="如 THB" style="width:80px"></div>
+          <div><label>名称</label><input type="text" id="newCurName" placeholder="泰铢"></div>
+          <div><label>汇率</label><input type="number" id="newCurRate" step="0.01" placeholder="7.2" style="width:80px"></div>
+          <div><label>反向</label><input type="checkbox" id="newCurInv" title="勾选表示1人民币=X外币"></div>
+          <div style="align-self:end"><button class="btn btn-primary" onclick="addCurrency()">添加</button></div>
+        </div>
+      </table></div></div>`;
+
+    // 换汇板块配置
+    html += `<div class="card"><h2>换汇板块配置</h2>
+      <p style="font-size:12px;color:#7F8C8D;margin-bottom:8px">选择哪些板块出现在「换汇录入」中</p>
+      <div style="margin-bottom:10px">
+        ${state.segments.map(s => `<label style="display:inline-block;margin:4px 12px 4px 0;font-size:13px">
+          <input type="checkbox" ${((state.fxSegments||[]).includes(s.id))?'checked':''} onchange="toggleFxSeg('${s.id}', this.checked)"> ${s.short}
+        </label>`).join('')}
+      </div>
+    </div>`;
+
+    // 板块管理
+    html += `<div class="card"><h2>业务板块管理</h2>
+      <div style="overflow-x:auto"><table>
+        <thead><tr><th>ID</th><th>名称</th><th>简称</th><th>操作</th></tr></thead>
+        <tbody>${state.segments.map(s => `<tr>
+          <td>${s.id}</td><td>${s.name}</td><td>${s.short}</td>
+          <td>
+            <button class="btn btn-sm" onclick="editSegment('${s.id}')">改名</button>
+            <button class="btn btn-sm btn-danger" onclick="deleteSegment('${s.id}')">删除</button>
+          </td>
+        </tr>`).join('')}</tbody>
+      </table></div>
+      <div class="form-row" style="margin-top:12px">
+        <div><label>板块ID</label><input type="text" id="newSegId" placeholder="如 hotel"></div>
+        <div><label>全称</label><input type="text" id="newSegName" placeholder="酒店业务"></div>
+        <div><label>简称</label><input type="text" id="newSegShort" placeholder="酒店"></div>
+        <div style="align-self:end"><button class="btn btn-primary" onclick="addSegment()">添加板块</button></div>
+      </div></div>`;
+
+    // 账户管理
+    html += `<div class="card"><h2>账户管理</h2>
+      <div style="overflow-x:auto"><table>
+        <thead><tr><th>账号</th><th>名称</th><th>角色</th><th>所属板块</th><th>操作</th></tr></thead>
+        <tbody>${Object.entries(USERS).map(([k,v]) => `<tr>
+          <td>${k}</td><td>${v.name}</td><td>${v.role}</td>
+          <td>${(v.segments && v.segments.length) ? v.segments.map(id => (state.segments.find(s=>s.id===id)||{}).short || id).join(', ') : (v.segment || '全部')}</td>
+          <td>
+            ${k !== 'admin' ? `<button class="btn btn-sm" onclick="editUserPwd('${k}')">改密</button>
+            <button class="btn btn-sm" onclick="editUserSegments('${k}')">改权限</button>
+            <button class="btn btn-sm" onclick="toggleInvPerm('${k}')">${USERS[k].canInventory ? '取消库存' : '授权库存'}</button>
+            <button class="btn btn-sm btn-danger" onclick="deleteUser('${k}')">删除</button>` : '-'}
+          </td>
+        </tr>`).join('')}</tbody>
+      </table></div>
+      <div class="form-row" style="margin-top:12px">
+        <div><label>账号</label><input type="text" id="newUserId" placeholder="如 staff01"></div>
+        <div><label>密码</label><input type="text" id="newUserPwd" placeholder="密码"></div>
+        <div><label>名称</label><input type="text" id="newUserName" placeholder="显示名"></div>
+        <div><label>板块（可多选）</label><select id="newUserSeg" multiple style="height:80px">
+          ${state.segments.map(s=>`<option value="${s.id}">${s.short}</option>`).join('')}
+        </select></div>
+        <div style="align-self:end"><button class="btn btn-primary" onclick="addUser()">添加账户</button></div>
+      </div></div>`;
+  }
+
+  if (isAdmin) {
+    html += `<div class="card"><h2>货币库存调整</h2>
+      <p style="font-size:12px;color:#7F8C8D;margin-bottom:8px">手动修正库存（如初始资金、盘点差异）</p>
+      <div class="form-row">
+        <div><label>币种</label><select id="inv_cur">${state.currencies.map(c=>`<option value="${c.code}">${c.code}</option>`).join('')}</select></div>
+        <div><label>调整数量（正增负减）</label><input type="number" id="inv_amt" step="0.01"></div>
+        <div style="align-self:end"><button class="btn btn-primary" onclick="adjustInventory()">调整</button></div>
+      </div>
+    </div>`;
+  }
+  html += `<div class="card"><h2>当前账户</h2>
+    <p style="font-size:13px">登录：${currentUser ? currentUser.name : '-'}（${currentUser ? currentUser.username : ''}）</p>
+    <div style="margin-top:10px">
+      <button class="btn" onclick="changeMyPassword()">修改我的密码</button>
+      <button class="btn" style="margin-left:8px" onclick="logout()">退出登录</button>
+    </div>
+  </div>`;
+
+  if (isAdmin) {
+    html += `<div class="card"><h2>系统</h2>
+      <button class="btn btn-danger" onclick="resetConfig()">清除全部本地配置</button>
+    </div>`;
+  }
+  return html;
+}
+
+
+
+
+function setInventory() {
+  const seg = document.getElementById('inv_seg2').value;
+  const cur = document.getElementById('inv_cur2').value;
+  const val = parseFloat(document.getElementById('inv_set2').value);
+  if (!seg || !cur || isNaN(val)) { alert('请填写完整'); return; }
+  const segInv = getSegInv(seg);
+  segInv[cur] = val;
+  saveInventory();
+  alert(seg + ' 的 ' + cur + ' 已设为 ' + val);
+  render();
+}
+
+function adjustInventory2() {
+  const cur = document.getElementById('inv_cur2').value;
+  const amt = parseFloat(document.getElementById('inv_amt2').value);
+  const seg = document.getElementById('inv_seg2')?.value;
+  if (!cur || isNaN(amt) || !seg) { alert('请填写完整'); return; }
+  const segInv = getSegInv(seg);
+  segInv[cur] = (segInv[cur] || 0) + amt;
+  saveInventory();
+  alert(seg + ' 的 ' + cur + ' 已调整');
+  render();
+}
+
+function adjustInventory() {
+  const cur = document.getElementById('inv_cur').value;
+  const amt = parseFloat(document.getElementById('inv_amt').value);
+  if (!cur || isNaN(amt)) { alert('请填写'); return; }
+  if (!state.inventory[cur]) state.inventory[cur] = 0;
+  state.inventory[cur] += amt;
+  saveInventory();
+  alert(cur + ' 库存已调整为 ' + state.inventory[cur]);
+  render();
+}
+
+
+function addCurrency() {
+  const code = document.getElementById('newCurCode').value.trim().toUpperCase();
+  const name = document.getElementById('newCurName').value.trim();
+  const rate = parseFloat(document.getElementById('newCurRate').value);
+  const inv = document.getElementById('newCurInv').checked;
+  if (!code || !name || isNaN(rate)) { alert('请填写完整'); return; }
+  if (state.currencies.find(c => c.code === code)) { alert('已存在'); return; }
+  state.currencies.push({ code, name, rate, inverted: inv });
+  localStorage.setItem('custom_rates', JSON.stringify(state.currencies));
+  render();
+}
+function deleteCurrency(code) {
+  if (code === 'CNY') { alert('人民币不能删除'); return; }
+  if (!confirm('删除 ' + code + '？')) return;
+  state.currencies = state.currencies.filter(c => c.code !== code);
+  localStorage.setItem('custom_rates', JSON.stringify(state.currencies));
+  render();
+}
+
+function updateRate(code, val) {
+  const c = state.currencies.find(x => x.code === code);
+  if (c) {
+    c.rate = parseFloat(val) || 1;
+    localStorage.setItem('custom_rates', JSON.stringify(state.currencies));
+  }
+}
+
+
+function toggleFxSeg(id, checked) {
+  if (!state.fxSegments) state.fxSegments = [];
+  if (checked) {
+    if (!state.fxSegments.includes(id)) state.fxSegments.push(id);
+  } else {
+    state.fxSegments = state.fxSegments.filter(x => x !== id);
+  }
+  localStorage.setItem('fx_segments', JSON.stringify(state.fxSegments));
+}
+
+function addSegment() {
+  const id = document.getElementById('newSegId').value.trim();
+  const name = document.getElementById('newSegName').value.trim();
+  const short = document.getElementById('newSegShort').value.trim() || name;
+  if (!id || !name) { alert('请填写ID和名称'); return; }
+  if (state.segments.find(s => s.id === id)) { alert('ID已存在'); return; }
+  const colors = ['#1F4E79','#27AE60','#8E44AD','#E67E22','#148F77','#C0392B','#2980B9'];
+  state.segments.push({ id, name, short, color: colors[state.segments.length % colors.length] });
+  localStorage.setItem('custom_segments', JSON.stringify(state.segments));
+  render();
+}
+
+
+function editSegment(id) {
+  const seg = state.segments.find(s => s.id === id);
+  if (!seg) return;
+  const newName = prompt('修改全称：', seg.name);
+  if (newName === null) return;
+  const newShort = prompt('修改简称：', seg.short);
+  if (newShort === null) return;
+  if (newName.trim()) seg.name = newName.trim();
+  if (newShort.trim()) seg.short = newShort.trim();
+  localStorage.setItem('custom_segments', JSON.stringify(state.segments));
+  alert('已更新');
+  render();
+}
+
+function deleteSegment(id) {
+  if (!confirm('确定删除板块？')) return;
+  state.segments = state.segments.filter(s => s.id !== id);
+  localStorage.setItem('custom_segments', JSON.stringify(state.segments));
+  render();
+}
+
+function addUser() {
+  const id = document.getElementById('newUserId').value.trim();
+  const pwd = document.getElementById('newUserPwd').value.trim();
+  const name = document.getElementById('newUserName').value.trim() || id;
+  const sel = document.getElementById('newUserSeg');
+  const segs = Array.from(sel.selectedOptions).map(o => o.value);
+  if (!id || !pwd) { alert('请填写账号和密码'); return; }
+  if (USERS[id]) { alert('账号已存在'); return; }
+  USERS[id] = { 
+    pwd, 
+    role: segs.length ? 'staff' : 'admin', 
+    segments: segs, 
+    segment: segs[0] || null,
+    name 
+  };
+  saveUsers();
+  render();
+}
+
+function changeMyPassword() {
+  if (!currentUser) return;
+  const oldPwd = prompt('请输入当前密码：');
+  if (oldPwd !== currentUser.pwd && oldPwd !== USERS[currentUser.username]?.pwd) {
+    alert('当前密码错误');
+    return;
+  }
+  const newPwd = prompt('请输入新密码：');
+  if (!newPwd || !newPwd.trim()) return;
+  const confirmPwd = prompt('再次输入新密码：');
+  if (newPwd !== confirmPwd) { alert('两次密码不一致'); return; }
+  USERS[currentUser.username].pwd = newPwd.trim();
+  currentUser.pwd = newPwd.trim();
+  saveUsers();
+  sessionStorage.setItem("user", JSON.stringify(currentUser));
+  alert('密码已修改');
+}
+
+function editUserPwd(id) {
+  const newPwd = prompt('输入新密码：', USERS[id].pwd);
+  if (newPwd && newPwd.trim()) {
+    USERS[id].pwd = newPwd.trim();
+    saveUsers();
+    alert('密码已更新');
+  }
+}
+
+
+function toggleInvPerm(id) {
+  if (!USERS[id]) return;
+  USERS[id].canInventory = !USERS[id].canInventory;
+  saveUsers();
+  alert(USERS[id].canInventory ? '已授权库存调整' : '已取消库存权限');
+  render();
+}
+
+function editUserSegments(id) {
+  const current = USERS[id].segments || (USERS[id].segment ? [USERS[id].segment] : []);
+  const options = state.segments.map(s => s.id + ':' + s.short).join('\n');
+  const input = prompt('输入板块ID，多个用逗号分隔\n可选：' + state.segments.map(s=>s.id).join(', '), current.join(','));
+  if (input === null) return;
+  const segs = input.split(',').map(s => s.trim()).filter(s => s && state.segments.find(x => x.id === s));
+  USERS[id].segments = segs;
+  USERS[id].segment = segs[0] || null;
+  USERS[id].role = segs.length ? 'staff' : 'admin';
+  saveUsers();
+  alert('权限已更新');
+  render();
+}
+
+function deleteUser(id) {
+  if (id === 'admin') return;
+  if (!confirm('确定删除账户 ' + id + '？')) return;
+  delete USERS[id];
+  saveUsers();
+  render();
+}
+
+
+
+function setInventory() {
+  const seg = document.getElementById('inv_seg2').value;
+  const cur = document.getElementById('inv_cur2').value;
+  const val = parseFloat(document.getElementById('inv_set2').value);
+  if (!seg || !cur || isNaN(val)) { alert('请填写完整'); return; }
+  const segInv = getSegInv(seg);
+  segInv[cur] = val;
+  saveInventory();
+  alert(seg + ' 的 ' + cur + ' 已设为 ' + val);
+  render();
+}
+
+function adjustInventory2() {
+  const cur = document.getElementById('inv_cur2').value;
+  const amt = parseFloat(document.getElementById('inv_amt2').value);
+  const seg = document.getElementById('inv_seg2')?.value;
+  if (!cur || isNaN(amt) || !seg) { alert('请填写完整'); return; }
+  const segInv = getSegInv(seg);
+  segInv[cur] = (segInv[cur] || 0) + amt;
+  saveInventory();
+  alert(seg + ' 的 ' + cur + ' 已调整');
+  render();
+}
+
+function adjustInventory() {
+  const cur = document.getElementById('inv_cur').value;
+  const amt = parseFloat(document.getElementById('inv_amt').value);
+  if (!cur || isNaN(amt)) { alert('请填写'); return; }
+  if (!state.inventory[cur]) state.inventory[cur] = 0;
+  state.inventory[cur] += amt;
+  saveInventory();
+  alert(cur + ' 库存已调整为 ' + state.inventory[cur]);
+  render();
+}
+
+
+function addCurrency() {
+  const code = document.getElementById('newCurCode').value.trim().toUpperCase();
+  const name = document.getElementById('newCurName').value.trim();
+  const rate = parseFloat(document.getElementById('newCurRate').value);
+  const inv = document.getElementById('newCurInv').checked;
+  if (!code || !name || isNaN(rate)) { alert('请填写完整'); return; }
+  if (state.currencies.find(c => c.code === code)) { alert('已存在'); return; }
+  state.currencies.push({ code, name, rate, inverted: inv });
+  localStorage.setItem('custom_rates', JSON.stringify(state.currencies));
+  render();
+}
+function deleteCurrency(code) {
+  if (code === 'CNY') { alert('人民币不能删除'); return; }
+  if (!confirm('删除 ' + code + '？')) return;
+  state.currencies = state.currencies.filter(c => c.code !== code);
+  localStorage.setItem('custom_rates', JSON.stringify(state.currencies));
+  render();
+}
+
+function updateRate(code, val) {
+  const c = state.currencies.find(x => x.code === code);
+  if (c) {
+    c.rate = parseFloat(val) || 1;
+    // 汇率存在本地，刷新后保持（如需持久化可扩展）
+    localStorage.setItem('custom_rates', JSON.stringify(state.currencies));
+  }
+}
+function logout() {
+  sessionStorage.removeItem("user");
+  location.reload();
+}
+function resetConfig() { if(confirm('清除？')){ localStorage.removeItem('sb_url'); localStorage.removeItem('sb_key'); location.reload(); } }
+
+if(currentUser) { applyRoleUI(); init(); }
+</script>
+</body>
+</html>
