@@ -892,6 +892,13 @@ function calcFromIncome() {
   const inAmt = parseFloat(document.getElementById('ex_in_amt').value) || 0;
   const inRate = parseFloat(document.getElementById('ex_in_rate').value) || 0;
   const outCur = document.getElementById('ex_out_cur').value;
+  const costEl = document.getElementById('ex_out_cost');
+  
+  // 非人民币收入时，清空出货成本（不算利润）
+  if (inCur !== 'CNY' && costEl) {
+    costEl.value = '';
+    costEl.placeholder = '外币收入不算利润';
+  }
   
   if (inAmt <= 0 || inRate <= 0) return;
   
@@ -957,7 +964,7 @@ async function saveExchange() {
   const pay = document.getElementById('ex_pay').value;
   const inCur = document.getElementById('ex_in_cur').value;
   const inAmt = parseFloat(document.getElementById('ex_in_amt').value) || 0;
-  const inCost = parseFloat(document.getElementById('ex_in_cost').value) || 0;
+  const inRate = parseFloat(document.getElementById('ex_in_rate').value) || 0;
   const outCur = document.getElementById('ex_out_cur').value;
   const outAmt = parseFloat(document.getElementById('ex_out_amt').value) || 0;
   const outCost = parseFloat(document.getElementById('ex_out_cost').value) || 0;
@@ -997,7 +1004,7 @@ async function saveExchange() {
     alert(inCur === 'CNY' ? '已保存，利润：' + formatMoney(profit) : '已保存（外币换汇）');
     document.getElementById('ex_in_amt').value = '';
     document.getElementById('ex_out_amt').value = '';
-    document.getElementById('ex_in_cost').value = '';
+    document.getElementById('ex_in_rate').value = '';
     document.getElementById('ex_out_cost').value = '';
     document.getElementById('ex_desc').value = '';
     await loadData();
