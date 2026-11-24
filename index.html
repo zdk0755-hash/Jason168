@@ -387,7 +387,20 @@ async function init() {
 }
 
 async function loadData() {
-  const data = await sbFetch('transactions?select=*&order=date.desc');
+  setStatus('加载数据...');
+  let data;
+  try {
+    data = await sbFetch('transactions?select=*&order=date.desc');
+  } catch(e) {
+    setStatus('加载失败，重试中...');
+    await new Promise(r => setTimeout(r, 1000));
+    try {
+      data = await sbFetch('transactions?select=*&order=date.desc');
+    } catch(e2) {
+      setStatus('网络异常');
+      return;
+    }
+  }
   state.transactions = (data||[]).map(r => ({
     id: r.id, date: r.date, segment: r.segment, type: r.type,
     category: r.category, currency: r.currency, amount: Number(r.amount),
@@ -396,6 +409,7 @@ async function loadData() {
   }));
   // 如果用户正在录入页面，不自动刷新界面，避免清空输入
   const formPages = ['entry', 'exchange', 'logistics'];
+  setStatus('已连接 · ' + state.transactions.length + '条');
   if (currentPage && !formPages.includes(currentPage)) {
     render();
   }
@@ -1269,10 +1283,22 @@ function renderMonthly() {
     let mInc = 0, mExp = 0;
     dayKeys.forEach(d => { mInc += days[d].inc; mExp += days[d].exp; });
     const mProfit = mInc - mExp;
+    // 统计物流重量和件数
+    let totalWeight = 0, totalQty = 0;
+    const monthTxs = txs.filter(t => t.date && t.date.startsWith(m) && t.desc && t.desc.includes('[物流]'));
+    monthTxs.forEach(t => {
+      const wMatch = t.desc.match(/实际([\d.]+)kg/);
+      const qMatch = t.desc.match(/(\d+)台/);
+      if (wMatch) totalWeight += parseFloat(wMatch[1]);
+      if (qMatch) totalQty += parseInt(qMatch[1]);
+    });
+    const logisticsInfo = (totalWeight > 0 || totalQty > 0) 
+      ? ` | 重量${totalWeight.toFixed(1)}kg${totalQty > 0 ? ' 计件'+totalQty+'台' : ''}` 
+      : '';
     html += `<div style="margin-bottom:16px">
-      <div style="background:#1F4E79;color:white;padding:8px 12px;border-radius:6px 6px 0 0;display:flex;justify-content:space-between">
+      <div style="background:#1F4E79;color:white;padding:8px 12px;border-radius:6px 6px 0 0;display:flex;justify-content:space-between;flex-wrap:wrap">
         <span>${m}</span>
-        <span>收入 ${formatMoney(mInc)} | 支出 ${formatMoney(mExp)} | 利润 <b>${formatMoney(mProfit)}</b></span>
+        <span>收入 ${formatMoney(mInc)} | 支出 ${formatMoney(mExp)} | 利润 <b>${formatMoney(mProfit)}</b>${logisticsInfo}</span>
       </div>
       <div style="overflow-x:auto"><table style="margin:0">
         <thead><tr><th>日期</th><th>收入</th><th>支出</th><th>利润</th><th>外币明细</th></tr></thead>
