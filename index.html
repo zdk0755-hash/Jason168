@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>多业务板块收支核算系统（在线同步版）</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+:root { --primary:#1F4E79; --green:#27AE60; --red:#C0392B; --gray:#F4F6F7; --border:#BFBFBF; --text:#2C3E50; --muted:#7F8C8D; }
+* { box-sizing:border-box; margin:0; padding:0; }
+body { font-family:"微软雅黑","PingFang SC",sans-serif; background:#f0f2f5; color:var(--text); }
+.header { background:var(--primary); color:white; padding:14px 16px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; }
+.header h1 { font-size:18px; }
+.sync-status { font-size:12px; opacity:.9; }
+.nav { display:flex; gap:6px; flex-wrap:wrap; padding:10px 12px; background:white; border-bottom:1px solid #e0e0e0; overflow-x:auto; }
+.nav button { padding:7px 12px; border:none; background:var(--gray); border-radius:6px; cursor:pointer; font-size:13px; }
+.nav button.active { background:var(--primary); color:white; }
+.container { max-width:1100px; margin:0 auto; padding:12px; }
+.card { background:white; border-radius:10px; padding:14px; margin-bottom:12px; box-shadow:0 1px 3px rgba(0,0,0,.08); }
+.card h2 { font-size:15px; color:var(--primary); margin-bottom:10px; }
+.grid-3 { display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:10px; }
+.stat-card { background:var(--gray); border-radius:8px; padding:12px; text-align:center; }
+.stat-card .label { font-size:12px; color:var(--muted); }
+.stat-card .value { font-size:20px; font-weight:700; }
+.positive { color:var(--green); font-weight:600; }
+.negative { color:var(--red); font-weight:600; }
+table { width:100%; border-collapse:collapse; font-size:13px; }
+th,td { padding:7px 8px; text-align:left; border-bottom:1px solid #eee; }
+th { background:var(--primary); color:white; }
+.form-row { display:grid; grid-template-columns:repeat(auto-fit,minmax(120px,1fr)); gap:8px; margin-bottom:10px; }
+label { font-size:12px; color:var(--muted); display:block; margin-bottom:3px; }
+input,select { width:100%; padding:7px 8px; border:1px solid var(--border); border-radius:6px; font-size:13px; }
+.btn { padding:7px 14px; border:none; border-radius:6px; cursor:pointer; font-size:13px; }
+.btn-primary { background:var(--primary); color:white; }
+.btn-success { background:var(--green); color:white; }
+.btn-danger { background:var(--red); color:white; }
+.btn-sm { padding:3px 8px; font-size:12px; }
+.segment-tag { display:inline-block; padding:2px 7px; border-radius:4px; font-size:11px; }
+.badge { display:inline-block; padding:2px 6px; border-radius:4px; font-size:11px; }
+.badge-income { background:#D5F5E3; color:var(--green); }
+.badge-expense { background:#FADBD8; color:var(--red); }
+.setup-box { background:#FFF3CD; border:1px solid #FFC107; border-radius:8px; padding:16px; margin:20px auto; max-width:620px; }
+.setup-box h3 { color:#856404; margin-bottom:10px; }
+.setup-box ol { padding-left:20px; font-size:13px; line-height:1.7; }
+.empty { text-align:center; padding:30px; color:var(--muted); }
+</style>
+</head>
+<body>
+<div class="header">
+  <div><h1>多业务板块收支核算系统</h1><div class="sync-status" id="syncStatus">正在连接云端...</div></div>
+</div>
+<div class="nav">
+  <button class="active" data-page="dashboard" onclick="showPage('dashboard')">仪表盘</button>
+  <button data-page="entry" onclick="showPage('entry')">录入收支</button>
+  <button data-page="ledger" onclick="showPage('ledger')">明细账本</button>
+  <button data-page="daily" onclick="showPage('daily')">每日汇总</button>
+  <button data-page="monthly" onclick="showPage('monthly')">每月汇总</button>
+  <button data-page="settings" onclick="showPage('settings')">设置</button>
+</div>
+<div class="container" id="app"></div>
+
+<script>
+const SUPABASE_URL = localStorage.getItem('sb_url') || '';
+const SUPABASE_KEY = localStorage.getItem('sb_key') || '';
+let supabase = null;
+let state = {
+  segments: [
+    {id:'casino',name:'海外合规赌场兑汇业务',short:'赌场兑汇',color:'#1F4E79'},
+    {id:'restaurant',name:'中餐厅',short:'中餐厅',color:'#27AE60'},
+    {id:'tobacco',name:'烟酒',short:'烟酒',color:'#8E44AD'},
+    {id:'express',name:'快递',short:'快递',color:'#E67E22'},
+    {id:'exchange',name:'线下兑换店',short:'兑换店',color:'#148F77'}
+  ],
+  currencies: [
+    {code:'CNY',name:'人民币',rate:1},{code:'USD',name:'美元',rate:7.245},
+    {code:'EUR',name:'欧元',rate:7.68},{code:'HKD',name:'港币',rate:0.932},
+    {code:'MGA',name:'马达加斯加阿里亚里',rate:0.00162},{code:'SCR',name:'塞舌尔卢比',rate:0.52}
+  ],
+  categories: {
+    income:['销售收入','服务收入','兑汇差价收入','配送费收入','其他收入'],
+    expense:['采购成本','房租物业','员工工资','水电燃气','交通差旅','餐饮招待','办公费用','营销推广','税费支出','物流成本','其他支出']
+  },
+  transactions: [],
+  payMethods: ['现金','微信','支付宝','银行卡','其他']
+};
+let currentPage = 'dashboard';
+let currentSegmentFilter = 'all';
+
+async function init() {
+  if (!SUPABASE_URL || !SUPABASE_KEY) { showSetup(); return; }
+  supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+  await loadFromCloud();
+  subscribeRealtime();
+  render();
+  document.getElementById('syncStatus').textContent = '已连接云端 · 自动同步';
+}
+function showSetup() {
+  document.getElementById('app').innerHTML = `
+    <div class="setup-box">
+      <h3>首次使用：配置云端同步（免费）</h3>
+      <ol>
+        <li>打开 <a href="https://supabase.com" target="_blank">supabase.com</a> 注册（可用GitHub登录）</li>
+        <li>New Project 创建项目</li>
+        <li>Table Editor → New Table，表名填 <b>transactions</b>，勾选 Enable RLS</li>
+        <li>添加字段：date(text), segment(text), type(text), category(text), currency(text), amount(numeric), pay(text), desc(text), express_type(text), weight(numeric), price_per_kg(numeric)</li>
+        <li>Project Settings → API，复制 Project URL 和 anon public Key</li>
+      </ol>
+      <label>Project URL</label>
+      <input type="text" id="cfg_url" placeholder="https://xxxx.supabase.co" style="margin:6px 0">
+      <label>anon public Key</label>
+      <input type="text" id="cfg_key" placeholder="eyJhbGciOi..." style="margin:6px 0">
+      <button class="btn btn-primary" onclick="saveConfig()">保存并连接</button>
+    </div>`;
+}
+function saveConfig() {
+  const url = document.getElementById('cfg_url').value.trim();
+  const key = document.getElementById('cfg_key').value.trim();
+  if (!url || !key) { alert('请填写完整'); return; }
+  localStorage.setItem('sb_url', url);
+  localStorage.setItem('sb_key', key);
+  location.reload();
+}
+async function loadFromCloud() {
+  const { data, error } = await supabase.from('transactions').select('*').order('date', {ascending:false});
+  if (error) { document.getElementById('syncStatus').textContent = '连接失败'; return; }
+  state.transactions = (data||[]).map(r => ({
+    id: r.id, date: r.date, segment: r.segment, type: r.type,
+    category: r.category, currency: r.currency, amount: Number(r.amount),
+    pay: r.pay, desc: r.desc, expressType: r.express_type,
+    weight: r.weight ? Number(r.weight) : 0, pricePerKg: r.price_per_kg ? Number(r.price_per_kg) : 0
+  }));
+}
+function subscribeRealtime() {
+  supabase.channel('tx').on('postgres_changes', {event:'*', schema:'public', table:'transactions'}, () => {
+    loadFromCloud().then(render);
+  }).subscribe();
+}
+async function addTransaction() {
+  const date = document.getElementById('e_date').value;
+  const segment = document.getElementById('e_seg').value;
+  const type = document.getElementById('e_type').value;
+  const category = document.getElementById('e_cat').value;
+  const currency = document.getElementById('e_cur').value;
+  const amount = parseFloat(document.getElementById('e_amt').value);
+  const pay = document.getElementById('e_pay').value;
+  const desc = document.getElementById('e_desc').value.trim();
+  const expressType = document.getElementById('e_express_type')?.value || '';
+  const weight = parseFloat(document.getElementById('e_weight')?.value) || 0;
+  const pricePerKg = parseFloat(document.getElementById('e_price_per_kg')?.value) || 0;
+  if (!date || !segment || !type || !category || !currency || isNaN(amount) || amount <= 0) {
+    alert('请完整填写'); return;
+  }
+  const { error } = await supabase.from('transactions').insert({
+    date, segment, type, category, currency, amount, pay, desc,
+    express_type: expressType, weight, price_per_kg: pricePerKg
+  });
+  if (error) { alert('保存失败：' + error.message); return; }
+  document.getElementById('e_amt').value = '';
+  document.getElementById('e_desc').value = '';
+  await loadFromCloud(); render();
+}
+async function deleteTx(id) {
+  if (!confirm('确定删除？')) return;
+  await supabase.from('transactions').delete().eq('id', id);
+  await loadFromCloud(); render();
+}
+function formatMoney(n) { return n==null||isNaN(n)?'-':'¥'+Number(n).toLocaleString('zh-CN',{minimumFractionDigits:2,maximumFractionDigits:2}); }
+function today() { return new Date().toISOString().slice(0,10); }
+function getSegment(id) { return state.segments.find(s=>s.id===id)||{short:id,color:'#999'}; }
+function getRate(code) { const c=state.currencies.find(x=>x.code===code); return c?c.rate:1; }
+function toRMB(amt,cur) { return amt * getRate(cur); }
+function showPage(page) {
+  currentPage = page;
+  document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active', b.dataset.page===page));
+  render();
+}
+function render() {
+  const app = document.getElementById('app');
+  if (currentPage==='dashboard') app.innerHTML = renderDashboard();
+  else if (currentPage==='entry') app.innerHTML = renderEntry();
+  else if (currentPage==='ledger') app.innerHTML = renderLedger();
+  else if (currentPage==='daily') app.innerHTML = renderDaily();
+  else if (currentPage==='monthly') app.innerHTML = renderMonthly();
+  else if (currentPage==='settings') app.innerHTML = renderSettings();
+}
+function renderDashboard() {
+  const all = state.transactions;
+  const totalInc = all.filter(t=>t.type==='收入').reduce((s,t)=>s+toRMB(t.amount,t.currency),0);
+  const totalExp = all.filter(t=>t.type==='支出').reduce((s,t)=>s+toRMB(t.amount,t.currency),0);
+  const profit = totalInc - totalExp;
+  const ym = new Date().toISOString().slice(0,7);
+  const mTx = all.filter(t=>t.date.startsWith(ym));
+  const mInc = mTx.filter(t=>t.type==='收入').reduce((s,t)=>s+toRMB(t.amount,t.currency),0);
+  const mExp = mTx.filter(t=>t.type==='支出').reduce((s,t)=>s+toRMB(t.amount,t.currency),0);
+  let segHtml = state.segments.map(seg => {
+    const txs = all.filter(t=>t.segment===seg.id);
+    const inc = txs.filter(t=>t.type==='收入').reduce((s,t)=>s+toRMB(t.amount,t.currency),0);
+    const exp = txs.filter(t=>t.type==='支出').reduce((s,t)=>s+toRMB(t.amount,t.currency),0);
+    const p = inc - exp;
+    return `<tr><td><span class="segment-tag" style="background:${seg.color}22;color:${seg.color}">${seg.short}</span></td>
+      <td class="positive">${formatMoney(inc)}</td><td class="negative">${formatMoney(exp)}</td>
+      <td class="${p>=0?'positive':'negative'}">${formatMoney(p)}</td><td>${txs.length}</td></tr>`;
+  }).join('');
+  return `<div class="card"><h2>整体概况</h2><div class="grid-3">
+    <div class="stat-card"><div class="label">累计收入</div><div class="value positive">${formatMoney(totalInc)}</div></div>
+    <div class="stat-card"><div class="label">累计支出</div><div class="value negative">${formatMoney(totalExp)}</div></div>
+    <div class="stat-card"><div class="label">累计利润</div><div class="value ${profit>=0?'positive':'negative'}">${formatMoney(profit)}</div></div>
+  </div></div>
+  <div class="card"><h2>本月（${ym}）</h2><div class="grid-3">
+    <div class="stat-card"><div class="label">收入</div><div class="value positive">${formatMoney(mInc)}</div></div>
+    <div class="stat-card"><div class="label">支出</div><div class="value negative">${formatMoney(mExp)}</div></div>
+    <div class="stat-card"><div class="label">利润</div><div class="value ${(mInc-mExp)>=0?'positive':'negative'}">${formatMoney(mInc-mExp)}</div></div>
+  </div></div>
+  <div class="card"><h2>各板块利润</h2><div style="overflow-x:auto"><table>
+    <thead><tr><th>板块</th><th>收入</th><th>支出</th><th>利润</th><th>笔数</th></tr></thead>
+    <tbody>${segHtml}</tbody></table></div></div>`;
+}
+function renderEntry() {
+  return `<div class="card"><h2>录入收支</h2>
+    <div class="form-row">
+      <div><label>日期</label><input type="date" id="e_date" value="${today()}"></div>
+      <div><label>板块</label><select id="e_seg" onchange="toggleExpress()">${state.segments.map(s=>`<option value="${s.id}">${s.name}</option>`).join('')}</select></div>
+      <div><label>类型</label><select id="e_type" onchange="updateCat()"><option>收入</option><option>支出</option></select></div>
+      <div><label>分类</label><select id="e_cat"></select></div>
+    </div>
+    <div class="form-row">
+      <div><label>币种</label><select id="e_cur">${state.currencies.map(c=>`<option value="${c.code}">${c.code}</option>`).join('')}</select></div>
+      <div><label>金额</label><input type="number" id="e_amt" step="0.01"></div>
+      <div><label>支付方式</label><select id="e_pay">${state.payMethods.map(p=>`<option>${p}</option>`).join('')}</select></div>
+      <div><label>摘要</label><input type="text" id="e_desc"></div>
+    </div>
+    <div id="expressBox" style="display:none;background:#FFF8E1;padding:10px;border-radius:8px;margin-bottom:10px">
+      <div style="font-size:12px;color:#E67E22;margin-bottom:6px">快递专属</div>
+      <div class="form-row">
+        <div><label>运输类型</label><select id="e_express_type"><option value="">请选择</option><option>普通空运</option><option>快速空运</option><option>回国货物</option></select></div>
+        <div><label>重量(kg)</label><input type="number" id="e_weight" step="0.01"></div>
+        <div><label>单价/kg</label><input type="number" id="e_price_per_kg" step="0.01"></div>
+      </div>
+    </div>
+    <button class="btn btn-success" onclick="addTransaction()">保存</button>
+  </div>`;
+}
+function toggleExpress() {
+  const seg = document.getElementById('e_seg')?.value;
+  const box = document.getElementById('expressBox');
+  if (box) box.style.display = seg==='express' ? 'block' : 'none';
+}
+function updateCat() {
+  const type = document.getElementById('e_type')?.value || '收入';
+  const sel = document.getElementById('e_cat');
+  if (!sel) return;
+  const cats = type==='收入' ? state.categories.income : state.categories.expense;
+  sel.innerHTML = cats.map(c=>`<option>${c}</option>`).join('');
+}
+function renderLedger() {
+  let list = [...state.transactions];
+  if (currentSegmentFilter!=='all') list = list.filter(t=>t.segment===currentSegmentFilter);
+  list.sort((a,b)=>b.date.localeCompare(a.date));
+  const opts = `<option value="all">全部</option>` + state.segments.map(s=>`<option value="${s.id}" ${currentSegmentFilter===s.id?'selected':''}>${s.short}</option>`).join('');
+  if (!list.length) return `<div class="card"><div class="empty">暂无记录</div></div>`;
+  return `<div class="card"><div style="margin-bottom:10px"><select onchange="currentSegmentFilter=this.value;render()">${opts}</select></div>
+    <div style="overflow-x:auto"><table><thead><tr><th>日期</th><th>板块</th><th>类型</th><th>摘要</th><th>金额</th><th>人民币</th><th>操作</th></tr></thead>
+    <tbody>${list.map(t=>{
+      const seg = getSegment(t.segment);
+      const rmb = toRMB(t.amount, t.currency);
+      return `<tr><td>${t.date}</td><td><span class="segment-tag" style="background:${seg.color}22;color:${seg.color}">${seg.short}</span></td>
+        <td><span class="badge ${t.type==='收入'?'badge-income':'badge-expense'}">${t.type}</span></td>
+        <td>${t.desc||t.category}${t.expressType?' ['+t.expressType+']':''}</td>
+        <td>${t.amount} ${t.currency}</td><td class="${t.type==='收入'?'positive':'negative'}">${formatMoney(rmb)}</td>
+        <td><button class="btn btn-sm btn-danger" onclick="deleteTx('${t.id}')">删</button></td></tr>`;
+    }).join('')}</tbody></table></div></div>`;
+}
+function renderDaily() {
+  const byDate = {};
+  state.transactions.forEach(t => {
+    if (!byDate[t.date]) byDate[t.date] = {inc:0,exp:0};
+    const r = toRMB(t.amount, t.currency);
+    if (t.type==='收入') byDate[t.date].inc += r; else byDate[t.date].exp += r;
+  });
+  const dates = Object.keys(byDate).sort().reverse();
+  if (!dates.length) return `<div class="card"><div class="empty">暂无数据</div></div>`;
+  return `<div class="card"><h2>每日汇总</h2><div style="overflow-x:auto"><table>
+    <thead><tr><th>日期</th><th>收入</th><th>支出</th><th>利润</th></tr></thead>
+    <tbody>${dates.map(d=>{const x=byDate[d]; const p=x.inc-x.exp;
+      return `<tr><td>${d}</td><td class="positive">${formatMoney(x.inc)}</td><td class="negative">${formatMoney(x.exp)}</td><td class="${p>=0?'positive':'negative'}">${formatMoney(p)}</td></tr>`;
+    }).join('')}</tbody></table></div></div>`;
+}
+function renderMonthly() {
+  const byM = {};
+  state.transactions.forEach(t => {
+    const m = t.date.slice(0,7);
+    if (!byM[m]) byM[m] = {inc:0,exp:0};
+    const r = toRMB(t.amount, t.currency);
+    if (t.type==='收入') byM[m].inc += r; else byM[m].exp += r;
+  });
+  const months = Object.keys(byM).sort().reverse();
+  if (!months.length) return `<div class="card"><div class="empty">暂无数据</div></div>`;
+  return `<div class="card"><h2>每月汇总</h2><div style="overflow-x:auto"><table>
+    <thead><tr><th>月份</th><th>收入</th><th>支出</th><th>利润</th></tr></thead>
+    <tbody>${months.map(m=>{const x=byM[m]; const p=x.inc-x.exp;
+      return `<tr><td>${m}</td><td class="positive">${formatMoney(x.inc)}</td><td class="negative">${formatMoney(x.exp)}</td><td class="${p>=0?'positive':'negative'}">${formatMoney(p)}</td></tr>`;
+    }).join('')}</tbody></table></div></div>`;
+}
+function renderSettings() {
+  return `<div class="card"><h2>汇率</h2><table><thead><tr><th>币种</th><th>汇率</th></tr></thead>
+    <tbody>${state.currencies.map(c=>`<tr><td>${c.code} ${c.name}</td><td><input type="number" step="0.0001" value="${c.rate}" style="width:100px" onchange="updateRate('${c.code}',this.value)"></td></tr>`).join('')}</tbody></table></div>
+    <div class="card"><h2>重置配置</h2><button class="btn btn-danger" onclick="resetConfig()">清除云端配置</button></div>`;
+}
+function updateRate(code, val) { const c=state.currencies.find(x=>x.code===code); if(c) c.rate=parseFloat(val)||1; }
+function resetConfig() { if(confirm('清除后需重新配置')){ localStorage.removeItem('sb_url'); localStorage.removeItem('sb_key'); location.reload(); } }
+init();
+</script>
+</body>
+</html>
