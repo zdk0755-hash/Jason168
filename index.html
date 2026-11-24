@@ -54,7 +54,6 @@ input,select { width:100%; padding:7px 8px; border:1px solid var(--border); bord
     <input type="password" id="loginPwd" placeholder="密码" style="width:100%;padding:10px;border:1px solid #ccc;border-radius:6px;margin-bottom:14px;font-size:15px">
     <button onclick="doLogin()" style="width:100%;padding:10px;background:#1F4E79;color:white;border:none;border-radius:6px;font-size:15px;cursor:pointer">登录</button>
     <p id="loginError" style="color:#C0392B;font-size:12px;margin-top:10px;display:none">账号或密码错误</p>
-    <p style="margin-top:12px"><a href="#" onclick="resetLocalUsers();return false;" style="font-size:12px;color:#7F8C8D">登录失败？点此重置</a></p>
   </div>
 </div>
 <script>
@@ -101,21 +100,9 @@ function saveUsers() {
 
 let currentUser = null;
 
-
-function resetLocalUsers() {
-  localStorage.removeItem('custom_users');
-  USERS = DEFAULT_USERS;
-  alert('已重置，请用 admin / 888888 登录');
-  location.reload();
-}
-
 function doLogin() {
   const u = document.getElementById("loginUser").value.trim();
   const p = document.getElementById("loginPwd").value;
-  // 如果 USERS 为空，使用默认
-  if (!USERS || Object.keys(USERS).length === 0) {
-    USERS = DEFAULT_USERS;
-  }
   const user = USERS[u];
   if (user && user.pwd === p) {
     currentUser = { username: u, ...user };
@@ -127,7 +114,6 @@ function doLogin() {
   }
 }
 document.getElementById("loginPwd").addEventListener("keypress", e => { if(e.key==="Enter") doLogin(); });
-document.getElementById("loginUser").addEventListener("keypress", e => { if(e.key==="Enter") doLogin(); });
 
 // 页面加载时先从云端拉取账户
 (async function preloadUsers() {
