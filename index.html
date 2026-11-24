@@ -165,6 +165,7 @@ if (saved) {
   <button class="active" data-page="dashboard" onclick="showPage('dashboard')" id="navDashboard">仪表盘</button>
   <button data-page="entry" onclick="showPage('entry')">录入收支</button>
   <button data-page="exchange" onclick="showPage('exchange')">换汇录入</button>
+  <button data-page="logistics" onclick="showPage('logistics')">物流对账</button>
   <button data-page="ledger" onclick="showPage('ledger')">明细账本</button>
   <button data-page="daily" onclick="showPage('daily')">每日汇总</button>
   <button data-page="monthly" onclick="showPage('monthly')">每月汇总</button>
@@ -337,17 +338,18 @@ if (savedRates) {
 
 async function init() {
   if (!SB_URL || !SB_KEY) { showSetup(); setStatus('未配置'); return; }
-  setStatus('正在连接...');
+  setStatus('连接中...');
   try {
-    await loadUsersFromCloud();
-    await loadSettingsFromCloud();
-    await loadInventoryFromCloud();
-    await loadData();
+    // 并行加载，加快速度
+    await Promise.all([
+      loadUsersFromCloud(),
+      loadSettingsFromCloud(),
+      loadInventoryFromCloud(),
+      loadData()
+    ]);
     render();
-    setStatus('已连接 · 自动同步');
+    setStatus('已连接');
     applyRoleUI();
-    // 简单轮询同步（每15秒）
-    setInterval(loadData, 30000);
   } catch(e) {
     showError(e.message);
     setStatus('连接失败');
@@ -363,7 +365,7 @@ async function loadData() {
     weight: r.weight ? Number(r.weight) : 0, pricePerKg: r.price_per_kg ? Number(r.price_per_kg) : 0
   }));
   // 如果用户正在录入页面，不自动刷新界面，避免清空输入
-  const formPages = ['entry', 'exchange'];
+  const formPages = ['entry', 'exchange', 'logistics'];
   if (currentPage && !formPages.includes(currentPage)) {
     render();
   }
@@ -470,9 +472,10 @@ function editTx(id) {
   sbFetch('transactions?id=eq.' + id, {
     method: 'PATCH',
     body: JSON.stringify({ amount: amt, desc: newDesc })
-  }).then(() => {
+  }).then(async () => {
     alert('已修改');
-    loadData();
+    await loadData();
+    render();
   }).catch(e => alert('修改失败：' + e.message));
 }
 
@@ -553,6 +556,14 @@ function toRMB(amt, cur) {
   return a * getRate(cur); 
 }
 
+
+async function manualRefresh() {
+  setStatus('刷新中...');
+  await loadData();
+  render();
+  setStatus('已刷新');
+}
+
 function showPage(page) {
   currentPage = page;
   document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active', b.dataset.page===page));
@@ -564,12 +575,176 @@ function render() {
   if (currentPage==='dashboard') app.innerHTML = renderDashboard();
   else if (currentPage==='entry') app.innerHTML = renderEntry();
   else if (currentPage==='exchange') app.innerHTML = renderExchange();
+  else if (currentPage==='logistics') app.innerHTML = renderLogistics();
   else if (currentPage==='ledger') app.innerHTML = renderLedger();
   else if (currentPage==='daily') app.innerHTML = renderDaily();
   else if (currentPage==='monthly') app.innerHTML = renderMonthly();
   else if (currentPage==='settings') app.innerHTML = renderSettings();
 }
 
+
+
+function renderLogistics() {
+  return `<div class="card">
+    <h2>物流对账</h2>
+    <p style="font-size:12px;color:#7F8C8D;margin-bottom:12px">记录每日运输重量和成本，用于和上游对账</p>
+    <div class="form-row">
+      <div><label>日期</label><input type="date" id="lg_date" value="${today()}"></div>
+      <div><label>方向</label><select id="lg_dir">
+        <option value="国内">国内发出</option>
+        <option value="国外">国外发出</option>
+      </select></div>
+      <div><label>运输类型</label><select id="lg_type">
+        <option>普通空运</option>
+        <option>快速空运</option>
+        <option>回国货物</option>
+        <option>其他货物</option>
+      </select></div>
+    </div>
+    <div style="background:#E8F6F3;padding:12px;border-radius:8px;margin:12px 0">
+      <div style="font-size:13px;font-weight:600;color:#148F77;margin-bottom:8px">
+        计费方式
+        <select id="lg_mode" onchange="toggleLogisticsMode()" style="margin-left:10px;padding:4px 8px">
+          <option value="weight">按重量（公斤）</option>
+          <option value="unit">按件（台/个）</option>
+        </select>
+      </div>
+      <div id="lg_weight_fields">
+        <div class="form-row">
+          <div><label>总重量（kg）</label><input type="number" id="lg_total" step="0.01" placeholder="过磅总重" oninput="calcLogistics()"></div>
+          <div><label>同行带货（kg）</label><input type="number" id="lg_peer" step="0.01" placeholder="帮同行带的" value="0" oninput="calcLogistics()"></div>
+          <div><label>实际重量</label><input type="number" id="lg_actual" step="0.01" readonly style="background:#f5f5f5"></div>
+        </div>
+      </div>
+      <div id="lg_unit_fields" style="display:none">
+        <div class="form-row">
+          <div><label>数量（台/个）</label><input type="number" id="lg_qty" step="1" placeholder="如 5" oninput="calcLogistics()"></div>
+          <div><label>物品名称</label><input type="text" id="lg_item" placeholder="如 手机"></div>
+        </div>
+      </div>
+    </div>
+    <div style="background:#FDEBD0;padding:12px;border-radius:8px;margin-bottom:12px">
+      <div style="font-size:13px;font-weight:600;color:#E67E22;margin-bottom:8px">成本计算</div>
+      <div class="form-row">
+        <div><label id="lg_price_label">成本单价（元/公斤）</label><input type="number" id="lg_price" step="0.01" placeholder="如 25" oninput="calcLogistics()"></div>
+        <div><label>运输成本</label><input type="number" id="lg_cost" step="0.01" readonly style="background:#f5f5f5"></div>
+        <div><label>备注</label><input type="text" id="lg_note" placeholder="可选"></div>
+      </div>
+    </div>
+    <button class="btn btn-success" onclick="saveLogistics()">保存对账记录</button>
+  </div>
+  <div class="card">
+    <h2>最近对账记录</h2>
+    ${renderRecentLogistics()}
+  </div>`;
+}
+
+function toggleLogisticsMode() {
+  const mode = document.getElementById('lg_mode').value;
+  document.getElementById('lg_weight_fields').style.display = mode === 'weight' ? 'block' : 'none';
+  document.getElementById('lg_unit_fields').style.display = mode === 'unit' ? 'block' : 'none';
+  document.getElementById('lg_price_label').textContent = mode === 'weight' ? '成本单价（元/公斤）' : '成本单价（元/台）';
+  calcLogistics();
+}
+function calcLogistics() {
+  const mode = document.getElementById('lg_mode')?.value || 'weight';
+  const price = parseFloat(document.getElementById('lg_price').value) || 0;
+  let qty = 0;
+  if (mode === 'weight') {
+    const total = parseFloat(document.getElementById('lg_total').value) || 0;
+    const peer = parseFloat(document.getElementById('lg_peer').value) || 0;
+    qty = Math.max(0, total - peer);
+    document.getElementById('lg_actual').value = qty.toFixed(2);
+  } else {
+    qty = parseFloat(document.getElementById('lg_qty').value) || 0;
+  }
+  document.getElementById('lg_cost').value = (qty * price).toFixed(2);
+}
+
+function renderRecentLogistics() {
+  const list = state.transactions
+    .filter(t => t.desc && t.desc.includes('[物流]'))
+    .sort((a,b) => b.date.localeCompare(a.date))
+    .slice(0, 15);
+  if (!list.length) return '<div class="empty">暂无记录</div>';
+  return `<div style="overflow-x:auto"><table>
+    <thead><tr><th>日期</th><th>摘要</th><th>成本</th>${currentUser && currentUser.role==='admin' ? '<th>操作</th>' : ''}</tr></thead>
+    <tbody>${list.map(t => `<tr>
+      <td>${t.date}</td>
+      <td style="font-size:12px">${t.desc}</td>
+      <td class="negative">${formatMoney(t.amount)}</td>
+      ${currentUser && currentUser.role==='admin' ? `<td>
+        <button class="btn btn-sm" onclick="editLogistics('${t.id}')">改</button>
+        <button class="btn btn-sm btn-danger" onclick="deleteTx('${t.id}')">撤单</button>
+      </td>` : ''}
+    </tr>`).join('')}</tbody>
+  </table></div>`;
+}
+
+
+function editLogistics(id) {
+  const t = state.transactions.find(x => x.id == id);
+  if (!t) return;
+  const newAmt = prompt('修改成本金额（当前：' + t.amount + '）：', t.amount);
+  if (newAmt === null) return;
+  const amt = parseFloat(newAmt);
+  if (isNaN(amt) || amt < 0) { alert('金额无效'); return; }
+  const newDesc = prompt('修改摘要：', t.desc || '');
+  if (newDesc === null) return;
+  sbFetch('transactions?id=eq.' + id, {
+    method: 'PATCH',
+    body: JSON.stringify({ amount: amt, desc: newDesc })
+  }).then(async () => {
+    alert('已修改');
+    await loadData();
+    render();
+  }).catch(e => alert('修改失败'));
+}
+
+async function saveLogistics() {
+  const date = document.getElementById('lg_date').value;
+  const dir = document.getElementById('lg_dir').value;
+  const type = document.getElementById('lg_type').value;
+  const mode = document.getElementById('lg_mode').value;
+  const price = parseFloat(document.getElementById('lg_price').value) || 0;
+  const cost = parseFloat(document.getElementById('lg_cost').value) || 0;
+  const note = document.getElementById('lg_note').value.trim();
+  let desc = '';
+
+  if (mode === 'weight') {
+    const total = parseFloat(document.getElementById('lg_total').value) || 0;
+    const peer = parseFloat(document.getElementById('lg_peer').value) || 0;
+    const actual = parseFloat(document.getElementById('lg_actual').value) || 0;
+    if (!date || actual <= 0 || price <= 0) { alert('请填写日期、重量和单价'); return; }
+    desc = `[物流] ${dir} ${type} | 总重${total}kg 同行${peer}kg 实际${actual}kg ×¥${price} ${note}`;
+  } else {
+    const qty = parseFloat(document.getElementById('lg_qty').value) || 0;
+    const item = document.getElementById('lg_item').value.trim() || '物品';
+    if (!date || qty <= 0 || price <= 0) { alert('请填写日期、数量和单价'); return; }
+    desc = `[物流] ${dir} ${type} | ${item} ${qty}台 ×¥${price} ${note}`;
+  }
+
+  try {
+    await sbFetch('transactions', {
+      method: 'POST',
+      body: JSON.stringify({
+        date, segment: 'express', type: '支出',
+        category: '运输成本', currency: 'CNY',
+        amount: cost, pay: '对账', desc
+      })
+    });
+    alert('已保存，成本：' + formatMoney(cost));
+    document.getElementById('lg_total').value = '';
+    document.getElementById('lg_peer').value = '0';
+    document.getElementById('lg_price').value = '';
+    document.getElementById('lg_note').value = '';
+    calcLogistics();
+    await loadData();
+    render();
+  } catch(e) {
+    alert('保存失败：' + e.message);
+  }
+}
 
 function renderExchange() {
   setTimeout(calcOutCost, 50);
@@ -889,40 +1064,126 @@ function renderLedger() {
 }
 
 function renderDaily() {
+  const segFilter = document.getElementById('dailySegFilter')?.value || '';
+  const txs = getVisibleTransactions().filter(t => !segFilter || t.segment === segFilter);
+  const segOptions = state.segments.map(s => `<option value="${s.id}" ${segFilter===s.id?'selected':''}>${s.short}</option>`).join('');
+  
+  // 按日期分组，显示每条明细
   const byDate = {};
-  state.transactions.forEach(t => {
+  txs.forEach(t => {
     if (!t.date) return;
-    if (!byDate[t.date]) byDate[t.date] = {inc:0,exp:0};
-    const r = toRMB(t.amount, t.currency);
-    if (isNaN(r)) return;
-    if (t.type==='收入') byDate[t.date].inc += r; else byDate[t.date].exp += r;
+    if (!byDate[t.date]) byDate[t.date] = [];
+    byDate[t.date].push(t);
   });
   const dates = Object.keys(byDate).sort().reverse();
-  if (!dates.length) return `<div class="card"><div class="empty">暂无</div></div>`;
-  return `<div class="card"><h2>每日</h2><div style="overflow-x:auto"><table>
-    <thead><tr><th>日期</th><th>收入</th><th>支出</th><th>利润</th></tr></thead>
-    <tbody>${dates.map(d=>{const x=byDate[d];const p=x.inc-x.exp;
-      return `<tr><td>${d}</td><td class="positive">${formatMoney(x.inc)}</td><td class="negative">${formatMoney(x.exp)}</td><td class="${p>=0?'positive':'negative'}">${formatMoney(p)}</td></tr>`;
-    }).join('')}</tbody></table></div></div>`;
+  
+  let html = `<div class="card"><h2>每日汇总</h2>
+    <div style="margin-bottom:10px">
+      <label>板块：</label>
+      <select id="dailySegFilter" onchange="render()">
+        <option value="">全部</option>
+        ${segOptions}
+      </select>
+    </div>`;
+  
+  if (!dates.length) {
+    html += '<div class="empty">暂无数据</div></div>';
+    return html;
+  }
+  
+  dates.forEach(d => {
+    const items = byDate[d];
+    let inc = 0, exp = 0;
+    items.forEach(t => {
+      const r = toRMB(t.amount, t.currency);
+      if (t.type === '收入') inc += r; else exp += r;
+    });
+    const profit = inc - exp;
+    html += `<div style="margin-bottom:16px">
+      <div style="background:#1F4E79;color:white;padding:8px 12px;border-radius:6px 6px 0 0;display:flex;justify-content:space-between">
+        <span>${d}</span>
+        <span>收入 ${formatMoney(inc)} | 支出 ${formatMoney(exp)} | 利润 <b>${formatMoney(profit)}</b></span>
+      </div>
+      <div style="overflow-x:auto"><table style="margin:0">
+        <thead><tr><th>板块</th><th>类型</th><th>摘要</th><th>金额</th></tr></thead>
+        <tbody>${items.map(t => {
+          const seg = getSegment(t.segment);
+          const r = toRMB(t.amount, t.currency);
+          return `<tr>
+            <td><span class="segment-tag" style="background:${seg.color}22;color:${seg.color}">${seg.short}</span></td>
+            <td><span class="badge ${t.type==='收入'?'badge-income':'badge-expense'}">${t.type}</span></td>
+            <td style="font-size:12px">${t.desc||'-'}</td>
+            <td class="${t.type==='收入'?'positive':'negative'}">${formatMoney(r)}</td>
+          </tr>`;
+        }).join('')}</tbody>
+      </table></div>
+    </div>`;
+  });
+  html += '</div>';
+  return html;
 }
 
 function renderMonthly() {
-  const byM = {};
-  state.transactions.forEach(t => {
+  const segFilter = document.getElementById('monthlySegFilter')?.value || '';
+  const txs = getVisibleTransactions().filter(t => !segFilter || t.segment === segFilter);
+  const segOptions = state.segments.map(s => `<option value="${s.id}" ${segFilter===s.id?'selected':''}>${s.short}</option>`).join('');
+  
+  // 按月份分组，再按日期汇总
+  const byMonth = {};
+  txs.forEach(t => {
     if (!t.date) return;
     const m = t.date.slice(0,7);
-    if (!byM[m]) byM[m] = {inc:0,exp:0};
+    if (!byMonth[m]) byMonth[m] = {};
+    if (!byMonth[m][t.date]) byMonth[m][t.date] = {inc:0, exp:0};
     const r = toRMB(t.amount, t.currency);
     if (isNaN(r)) return;
-    if (t.type==='收入') byM[m].inc += r; else byM[m].exp += r;
+    if (t.type === '收入') byMonth[m][t.date].inc += r;
+    else byMonth[m][t.date].exp += r;
   });
-  const months = Object.keys(byM).sort().reverse();
-  if (!months.length) return `<div class="card"><div class="empty">暂无</div></div>`;
-  return `<div class="card"><h2>每月</h2><div style="overflow-x:auto"><table>
-    <thead><tr><th>月份</th><th>收入</th><th>支出</th><th>利润</th></tr></thead>
-    <tbody>${months.map(m=>{const x=byM[m];const p=x.inc-x.exp;
-      return `<tr><td>${m}</td><td class="positive">${formatMoney(x.inc)}</td><td class="negative">${formatMoney(x.exp)}</td><td class="${p>=0?'positive':'negative'}">${formatMoney(p)}</td></tr>`;
-    }).join('')}</tbody></table></div></div>`;
+  const months = Object.keys(byMonth).sort().reverse();
+  
+  let html = `<div class="card"><h2>每月汇总</h2>
+    <div style="margin-bottom:10px">
+      <label>板块：</label>
+      <select id="monthlySegFilter" onchange="render()">
+        <option value="">全部</option>
+        ${segOptions}
+      </select>
+    </div>`;
+  
+  if (!months.length) {
+    html += '<div class="empty">暂无数据</div></div>';
+    return html;
+  }
+  
+  months.forEach(m => {
+    const days = byMonth[m];
+    const dayKeys = Object.keys(days).sort().reverse();
+    let mInc = 0, mExp = 0;
+    dayKeys.forEach(d => { mInc += days[d].inc; mExp += days[d].exp; });
+    const mProfit = mInc - mExp;
+    html += `<div style="margin-bottom:16px">
+      <div style="background:#1F4E79;color:white;padding:8px 12px;border-radius:6px 6px 0 0;display:flex;justify-content:space-between">
+        <span>${m}</span>
+        <span>收入 ${formatMoney(mInc)} | 支出 ${formatMoney(mExp)} | 利润 <b>${formatMoney(mProfit)}</b></span>
+      </div>
+      <div style="overflow-x:auto"><table style="margin:0">
+        <thead><tr><th>日期</th><th>收入</th><th>支出</th><th>利润</th></tr></thead>
+        <tbody>${dayKeys.map(d => {
+          const x = days[d];
+          const p = x.inc - x.exp;
+          return `<tr>
+            <td>${d}</td>
+            <td class="positive">${formatMoney(x.inc)}</td>
+            <td class="negative">${formatMoney(x.exp)}</td>
+            <td class="${p>=0?'positive':'negative'}">${formatMoney(p)}</td>
+          </tr>`;
+        }).join('')}</tbody>
+      </table></div>
+    </div>`;
+  });
+  html += '</div>';
+  return html;
 }
 
 function renderSettings() {
