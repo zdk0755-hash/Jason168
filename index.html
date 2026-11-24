@@ -767,12 +767,12 @@ async function saveLogistics() {
     const peer = parseFloat(document.getElementById('lg_peer').value) || 0;
     const actual = parseFloat(document.getElementById('lg_actual').value) || 0;
     if (!date || actual <= 0 || price <= 0) { alert('请填写日期、重量和单价'); return; }
-    desc = `[物流] ${dir} ${type} | 总重${total}kg 同行${peer}kg 实际${actual}kg ×¥${price} ${note}`;
+    desc = `[物流] @' + (currentUser?.username || '') + '  ${dir} ${type} | 总重${total}kg 同行${peer}kg 实际${actual}kg ×¥${price} ${note}`;
   } else {
     const qty = parseFloat(document.getElementById('lg_qty').value) || 0;
     const item = document.getElementById('lg_item').value.trim() || '物品';
     if (!date || qty <= 0 || price <= 0) { alert('请填写日期、数量和单价'); return; }
-    desc = `[物流] ${dir} ${type} | ${item} ${qty}台 ×¥${price} ${note}`;
+    desc = `[物流] @' + (currentUser?.username || '') + '  ${dir} ${type} | ${item} ${qty}台 ×¥${price} ${note}`;
   }
 
   try {
@@ -997,7 +997,7 @@ async function saveExchange() {
     profitStr = ` | 利润${profit.toFixed(0)}`;
   }
 
-  const fullDesc = `[换汇] ${desc} | IN:${inAmt}:${inCur} OUT:${outAmt}:${outCur}${profitStr}`;
+  const fullDesc = `[换汇] @' + (currentUser?.username || '') + '  ${desc} | IN:${inAmt}:${inCur} OUT:${outAmt}:${outCur}${profitStr}`;
 
   // 更新该板块库存
   const segInv = getSegInv(seg);
@@ -1149,7 +1149,7 @@ function renderLedger() {
   const opts = `<option value="all">全部</option>` + state.segments.map(s=>`<option value="${s.id}" ${currentSegmentFilter===s.id?'selected':''}>${s.short}</option>`).join('');
   if (!list.length) return `<div class="card"><div class="empty">暂无记录</div></div>`;
   return `<div class="card"><div style="margin-bottom:10px"><select onchange="currentSegmentFilter=this.value;render()">${opts}</select></div>
-    <div style="overflow-x:auto"><table><thead><tr><th>日期</th><th>板块</th><th>类型</th><th>摘要</th><th>金额</th><th>人民币</th><th>操作</th></tr></thead>
+    <div style="overflow-x:auto"><table><thead><tr><th>日期</th><th>板块</th><th>操作人</th><th>类型</th><th>摘要</th><th>金额</th><th>人民币</th><th>操作</th></tr></thead>
     <tbody>${list.map(t=>{
       const seg = getSegment(t.segment);
       const rmb = toRMB(t.amount, t.currency);
@@ -1210,13 +1210,14 @@ function renderDaily() {
         <span>收入 ${formatMoney(inc)} | 支出 ${formatMoney(exp)} | 利润 <b>${formatMoney(profit)}</b></span>
       </div>
       <div style="overflow-x:auto"><table style="margin:0">
-        <thead><tr><th>板块</th><th>类型</th><th>摘要</th><th>金额</th></tr></thead>
+        <thead><tr><th>板块</th><th>操作人</th><th>类型</th><th>摘要</th><th>金额</th></tr></thead>
         <tbody>${items.map(t => {
           const seg = getSegment(t.segment);
           const r = toRMB(t.amount, t.currency);
           const origAmt = t.currency === 'CNY' ? '' : ` <span style="color:#7F8C8D;font-size:11px">(${t.amount.toLocaleString()} ${t.currency})</span>`;
           return `<tr>
             <td><span class="segment-tag" style="background:${seg.color}22;color:${seg.color}">${seg.short}</span></td>
+            <td style="font-size:11px;color:#7F8C8D">${(t.desc||'').match(/@(\w+)/)?.[1] || '-'}</td>
             <td><span class="badge ${t.type==='收入'?'badge-income':'badge-expense'}">${t.type}</span></td>
             <td style="font-size:12px">${t.desc||'-'}</td>
             <td class="${t.type==='收入'?'positive':'negative'}">${formatMoney(r)}${origAmt}</td>
