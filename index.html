@@ -844,7 +844,7 @@ function renderExchange() {
     <div style="background:#FDEBD0;padding:12px;border-radius:8px;margin-bottom:12px">
       <div style="font-size:13px;font-weight:600;color:#E67E22;margin-bottom:8px">支出（你付出）</div>
       <div class="form-row">
-        <div><label>币种</label><select id="ex_out_cur" onchange="calcOutCost()">${state.currencies.map(c=>`<option value="${c.code}" ${c.code==='MGA'?'selected':''}>${c.code} ${c.name}</option>`).join('')}</select></div>
+        <div><label>币种</label><select id="ex_out_cur" onchange="calcFromIncome();calcOutCost()">${state.currencies.map(c=>`<option value="${c.code}" ${c.code==='MGA'?'selected':''}>${c.code} ${c.name}</option>`).join('')}</select></div>
         <div><label>金额</label><input type="number" id="ex_out_amt" step="0.01" placeholder="你付出的金额" oninput="calcOutCost()"></div>
         <div><label>当日汇率</label><input type="number" id="ex_rate" step="0.01" onchange="saveRateFromExchange()" title="修改后自动保存"></div>
         <div><label>出货成本（自动）</label><input type="number" id="ex_out_cost" step="0.01" placeholder="自动计算" readonly style="background:#f5f5f5"></div>
@@ -891,11 +891,24 @@ function calcFromIncome() {
   const inCur = document.getElementById('ex_in_cur').value;
   const inAmt = parseFloat(document.getElementById('ex_in_amt').value) || 0;
   const inRate = parseFloat(document.getElementById('ex_in_rate').value) || 0;
-  // 如果收入是外币，自动算出支出人民币
-  if (inCur !== 'CNY' && inAmt > 0 && inRate > 0) {
-    const cnyAmt = inAmt / inRate;
-    document.getElementById('ex_out_cur').value = 'CNY';
-    document.getElementById('ex_out_amt').value = cnyAmt.toFixed(2);
+  const outCur = document.getElementById('ex_out_cur').value;
+  
+  if (inAmt <= 0 || inRate <= 0) return;
+  
+  // 收入外币，支出MGA：金额 × 汇率 = MGA
+  if (inCur !== 'MGA' && inCur !== 'CNY' && outCur === 'MGA') {
+    document.getElementById('ex_out_amt').value = (inAmt * inRate).toFixed(0);
+  }
+  // 收入MGA，支出人民币：金额 ÷ 汇率 = CNY
+  else if (inCur === 'MGA' && outCur === 'CNY') {
+    document.getElementById('ex_out_amt').value = (inAmt / inRate).toFixed(2);
+  }
+  // 收入外币，支出人民币：先算MGA再算CNY
+  else if (inCur !== 'CNY' && inCur !== 'MGA' && outCur === 'CNY') {
+    const mgaRate = state.currencies.find(c => c.code === 'MGA');
+    const mgaPerCny = mgaRate ? mgaRate.rate : 690;
+    const mgaAmt = inAmt * inRate;
+    document.getElementById('ex_out_amt').value = (mgaAmt / mgaPerCny).toFixed(2);
   }
 }
 
@@ -955,12 +968,15 @@ async function saveExchange() {
     return;
   }
 
-  // 利润 = 收入人民币 - 出货成本
-  // 收入按汇率折算成人民币，出货成本直接用填写的人民币金额
-  const inRMB = inAmt * getRate(inCur);
-  const profit = inRMB - outCost;
+  // 只有收入是人民币时才计算利润
+  let profit = 0;
+  let profitStr = '';
+  if (inCur === 'CNY') {
+    profit = inAmt - outCost;
+    profitStr = ` | 利润${profit.toFixed(0)}`;
+  }
 
-  const fullDesc = `[换汇] ${desc} | IN:${inAmt}:${inCur} OUT:${outAmt}:${outCur} | 利润${profit.toFixed(0)}`;
+  const fullDesc = `[换汇] ${desc} | IN:${inAmt}:${inCur} OUT:${outAmt}:${outCur}${profitStr}`;
 
   // 更新该板块库存
   const segInv = getSegInv(seg);
@@ -978,7 +994,7 @@ async function saveExchange() {
         amount: Math.abs(profit), pay, desc: fullDesc
       })
     });
-    alert('换汇记录已保存，利润：' + formatMoney(profit));
+    alert(inCur === 'CNY' ? '已保存，利润：' + formatMoney(profit) : '已保存（外币换汇）');
     document.getElementById('ex_in_amt').value = '';
     document.getElementById('ex_out_amt').value = '';
     document.getElementById('ex_in_cost').value = '';
