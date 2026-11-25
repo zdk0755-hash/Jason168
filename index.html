@@ -305,9 +305,60 @@ async function saveInventoryToCloud() {
   } catch(e) { console.log('save inv', e); }
 }
 
+function persistInventoryLocal() {
+  localStorage.setItem('fx_inventory', JSON.stringify(state.inventory));
+}
 function saveInventory() { 
-  localStorage.setItem('fx_inventory', JSON.stringify(state.inventory)); 
+  persistInventoryLocal();
   saveInventoryToCloud();
+}
+async function refreshInventoryFromCloud() {
+  const data = await sbFetch('app_settings?Key=eq.inventory&select=value');
+  if (data && data.length && data[0].value) {
+    const parsed = typeof data[0].value === 'string' ? JSON.parse(data[0].value) : data[0].value;
+    if (parsed && parsed._segments) {
+      state.inventory = parsed;
+    }
+  }
+}
+async function writeInventoryToCloud() {
+  const existing = await sbFetch('app_settings?Key=eq.inventory&select=Key');
+  const payload = { Key: 'inventory', value: JSON.stringify(state.inventory) };
+  if (existing && existing.length) {
+    await sbFetch('app_settings?Key=eq.inventory', { method: 'PATCH', body: JSON.stringify({ value: JSON.stringify(state.inventory) }) });
+  } else {
+    await sbFetch('app_settings', { method: 'POST', body: JSON.stringify(payload) });
+  }
+  persistInventoryLocal();
+}
+async function applyInventoryMutations(deltas) {
+  const snapshot = JSON.parse(JSON.stringify(state.inventory));
+  try {
+    await refreshInventoryFromCloud();
+    (deltas || []).forEach(({seg, cur, delta}) => {
+      if (!seg || !cur || !delta) return;
+      const segInv = getSegInv(seg);
+      segInv[cur] = (segInv[cur] || 0) + Number(delta);
+    });
+    await writeInventoryToCloud();
+  } catch (e) {
+    state.inventory = snapshot;
+    persistInventoryLocal();
+    throw e;
+  }
+}
+async function applyInventorySet(seg, cur, val) {
+  const snapshot = JSON.parse(JSON.stringify(state.inventory));
+  try {
+    await refreshInventoryFromCloud();
+    const segInv = getSegInv(seg);
+    segInv[cur] = Number(val);
+    await writeInventoryToCloud();
+  } catch (e) {
+    state.inventory = snapshot;
+    persistInventoryLocal();
+    throw e;
+  }
 }
 function getSegInv(seg) {
   if (!state.inventory._segments) state.inventory._segments = {};
@@ -431,7 +482,7 @@ function showError(msg) {
   document.getElementById('app').innerHTML = `
     <div class="error-box">
       <h3>连接失败</h3>
-      <p style="margin:8px 0;font-size:13px;word-break:break-all">${msg}</p>
+      <p style="margin:8px 0;font-size:13px;word-break:break-all">${esc(msg)}</p>
       <button class="btn btn-primary" onclick="resetConfig()">重新配置</button>
     </div>`;
 }
@@ -449,22 +500,11 @@ async function addTransaction() {
   const date = document.getElementById('e_date').value;
   const segment = document.getElementById('e_seg').value;
   const type = document.getElementById('e_type').value;
-  const category = document.getElementById('e_cat').value;
+  let category = document.getElementById('e_cat').value;
   const currency = document.getElementById('e_cur').value;
   const amount = parseFloat(document.getElementById('e_amt').value);
   const pay = document.getElementById('e_pay').value;
   const desc = document.getElementById('e_desc').value.trim();
-  
-  // 更新库存：收入增加，支出减少
-  if (segment && currency && !isNaN(amount)) {
-    const segInv = getSegInv(segment);
-    if (type === '收入') {
-      segInv[currency] = (segInv[currency] || 0) + amount;
-    } else {
-      segInv[currency] = (segInv[currency] || 0) - amount;
-    }
-    saveInventory();
-  }
   const expressType = document.getElementById('e_express_type')?.value || '';
   const weight = parseFloat(document.getElementById('e_weight')?.value) || null;
   const pricePerKg = parseFloat(document.getElementById('e_price_per_kg')?.value) || null;
@@ -480,6 +520,12 @@ async function addTransaction() {
         express_type: expressType, weight, price_per_kg: pricePerKg
       })
     });
+    try {
+      const delta = type === '收入' ? amount : -amount;
+      await applyInventoryMutations([{ seg: segment, cur: currency, delta }]);
+    } catch (invErr) {
+      alert('流水已保存，但库存同步失败：' + invErr.message);
+    }
     document.getElementById('e_amt').value = '';
     document.getElementById('e_desc').value = '';
     await loadData();
@@ -528,30 +574,22 @@ async function deleteTx(id) {
   const t = state.transactions.find(x => x.id == id);
   try {
     await sbFetch('transactions?id=eq.' + id, { method: 'DELETE' });
-    // 撤单时反向调整库存
+    // 撤单时反向调整库存（先拉最新库存再写回，失败则提示但不恢复已删流水）
     if (t && t.segment) {
-      const segInv = getSegInv(t.segment);
-      // 换汇记录：从摘要解析原始币种数量并反向
+      const deltas = [];
       if (t.desc && t.desc.includes('[换汇]') && t.desc.includes('IN:')) {
         const inMatch = t.desc.match(/IN:([\d.]+):(\w+)/);
         const outMatch = t.desc.match(/OUT:([\d.]+):(\w+)/);
-        if (inMatch) {
-          const amt = parseFloat(inMatch[1]), cur = inMatch[2];
-          segInv[cur] = (segInv[cur] || 0) - amt;
-        }
-        if (outMatch) {
-          const amt = parseFloat(outMatch[1]), cur = outMatch[2];
-          segInv[cur] = (segInv[cur] || 0) + amt;
-        }
+        if (inMatch) deltas.push({ seg: t.segment, cur: inMatch[2], delta: -parseFloat(inMatch[1]) });
+        if (outMatch) deltas.push({ seg: t.segment, cur: outMatch[2], delta: parseFloat(outMatch[1]) });
       } else if (t.currency) {
-        // 普通记录
-        if (t.type === '收入') {
-          segInv[t.currency] = (segInv[t.currency] || 0) - t.amount;
-        } else {
-          segInv[t.currency] = (segInv[t.currency] || 0) + t.amount;
-        }
+        const delta = t.type === '收入' ? -t.amount : t.amount;
+        deltas.push({ seg: t.segment, cur: t.currency, delta });
       }
-      saveInventory();
+      if (deltas.length) {
+        try { await applyInventoryMutations(deltas); }
+        catch (invErr) { alert('已撤单，但库存同步失败：' + invErr.message); }
+      }
     }
     await loadData();
     render();
@@ -583,7 +621,61 @@ function canAdjustInv() {
 }
 
 function formatMoney(n) { return n==null||isNaN(n)?'-':'¥'+Number(n).toLocaleString('zh-CN',{minimumFractionDigits:2,maximumFractionDigits:2}); }
-function today() { return new Date().toISOString().slice(0,10); }
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"'`]/g, ch => ({
+    '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;'
+  }[ch]));
+}
+function csvCell(v) {
+  const s = String(v ?? '');
+  if (/[",\n\r]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
+  return s;
+}
+function getExportTransactions() {
+  let list = getVisibleTransactions();
+  if (currentPage === 'ledger' && currentSegmentFilter !== 'all') {
+    list = list.filter(t => t.segment === currentSegmentFilter);
+  } else if (currentPage === 'daily') {
+    const seg = document.getElementById('dailySegFilter')?.value || '';
+    if (seg) list = list.filter(t => t.segment === seg);
+  } else if (currentPage === 'monthly') {
+    const seg = document.getElementById('monthlySegFilter')?.value || '';
+    if (seg) list = list.filter(t => t.segment === seg);
+  }
+  return list.slice().sort((a,b) => (b.date || '').localeCompare(a.date || ''));
+}
+function exportTransactionsCsv() {
+  const list = getExportTransactions();
+  const headers = ['日期','板块','类型','分类','币种','原币金额','折人民币','支付方式','摘要','操作人','快递类型','重量','每公斤单价'];
+  const rows = list.map(t => {
+    const op = (t.desc || '').match(/@([^\s]+)/)?.[1] || '';
+    return [
+      t.date, (getSegment(t.segment).short || t.segment), t.type, t.category || '',
+      t.currency, t.amount, toRMB(t.amount, t.currency).toFixed(2), t.pay || '',
+      t.desc || '', op, t.expressType || '', t.weight || '', t.pricePerKg || ''
+    ];
+  });
+  const csv = [headers, ...rows].map(r => r.map(csvCell).join(',')).join('\r\n');
+  const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
+  const a = document.createElement('a');
+  const url = URL.createObjectURL(blob);
+  a.href = url;
+  a.download = '明细账本_' + today() + '.csv';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+// 全系统日期一律按中国时间（Asia/Shanghai, UTC+8），与设备所在时区无关
+function chinaNow() {
+  return new Date(Date.now() + 8 * 3600 * 1000);
+}
+function today() {
+  return chinaNow().toISOString().slice(0, 10);
+}
+function currentYearMonth() {
+  return chinaNow().toISOString().slice(0, 7);
+}
 function getSegment(id) { return state.segments.find(s=>s.id===id)||{short:id,color:'#999'}; }
 function getRate(code) { 
   if (!code || code === 'CNY') return 1;
@@ -722,11 +814,11 @@ function renderRecentLogistics() {
     <thead><tr><th>日期</th><th>摘要</th><th>成本</th>${currentUser && currentUser.role==='admin' ? '<th>操作</th>' : ''}</tr></thead>
     <tbody>${list.map(t => `<tr>
       <td>${t.date}</td>
-      <td style="font-size:12px">${t.desc}</td>
+      <td style="font-size:12px">${esc(t.desc)}</td>
       <td class="negative">${formatMoney(t.amount)}</td>
       ${currentUser && currentUser.role==='admin' ? `<td>
-        <button class="btn btn-sm" onclick="editLogistics('${t.id}')">改</button>
-        <button class="btn btn-sm btn-danger" onclick="deleteTx('${t.id}')">撤单</button>
+        <button class="btn btn-sm" onclick="editLogistics('${esc(t.id)}')">改</button>
+        <button class="btn btn-sm btn-danger" onclick="deleteTx('${esc(t.id)}')">撤单</button>
       </td>` : ''}
     </tr>`).join('')}</tbody>
   </table></div>`;
@@ -767,12 +859,12 @@ async function saveLogistics() {
     const peer = parseFloat(document.getElementById('lg_peer').value) || 0;
     const actual = parseFloat(document.getElementById('lg_actual').value) || 0;
     if (!date || actual <= 0 || price <= 0) { alert('请填写日期、重量和单价'); return; }
-    desc = `[物流] @' + (currentUser?.username || '') + '  ${dir} ${type} | 总重${total}kg 同行${peer}kg 实际${actual}kg ×¥${price} ${note}`;
+    desc = `[物流] @${currentUser?.username || ''}  ${dir} ${type} | 总重${total}kg 同行${peer}kg 实际${actual}kg ×¥${price} ${note}`;
   } else {
     const qty = parseFloat(document.getElementById('lg_qty').value) || 0;
     const item = document.getElementById('lg_item').value.trim() || '物品';
     if (!date || qty <= 0 || price <= 0) { alert('请填写日期、数量和单价'); return; }
-    desc = `[物流] @' + (currentUser?.username || '') + '  ${dir} ${type} | ${item} ${qty}台 ×¥${price} ${note}`;
+    desc = `[物流] @${currentUser?.username || ''}  ${dir} ${type} | ${item} ${qty}台 ×¥${price} ${note}`;
   }
 
   try {
@@ -814,7 +906,7 @@ function renderExchange() {
     const inv = (state.inventory._segments || {})[s.id] || {};
     const items = Object.entries(inv).filter(([k,v])=>v!==0)
       .map(([k,v]) => `${k}:${Number(v).toLocaleString()}`).join(' · ');
-    return items ? `<div style="font-size:12px;margin:4px 0"><b>${s.short}</b>：${items}</div>` : '';
+    return items ? `<div style="font-size:12px;margin:4px 0"><b>${esc(s.short)}</b>：${esc(items)}</div>` : '';
   }).join('');
 
   const invHtml = `<div style="margin-bottom:8px"><b>总库存</b><br>${totalHtml}</div>
@@ -827,9 +919,9 @@ function renderExchange() {
     ${canAdjustInv() ? `<div class="form-row" style="margin-top:10px">
       <div><label>板块</label><select id="inv_seg2">${
         state.segments.filter(s => (state.fxSegments||[]).includes(s.id))
-          .map(s=>`<option value="${s.id}">${s.short}</option>`).join('')
+          .map(s=>`<option value="${esc(s.id)}">${esc(s.short)}</option>`).join('')
       }</select></div>
-      <div><label>币种</label><select id="inv_cur2">${state.currencies.map(c=>`<option value="${c.code}">${c.code}</option>`).join('')}</select></div>
+      <div><label>币种</label><select id="inv_cur2">${state.currencies.map(c=>`<option value="${esc(c.code)}">${esc(c.code)}</option>`).join('')}</select></div>
       <div><label>设为数量</label><input type="number" id="inv_set2" step="0.01" placeholder="直接填目标数量"></div>
       <div style="align-self:end"><button class="btn btn-primary" onclick="setInventory()">设置</button></div>
     </div>
@@ -841,7 +933,7 @@ function renderExchange() {
     <div class="form-row">
       <div><label>日期</label><input type="date" id="ex_date" value="${today()}"></div>
       <div><label>归属板块</label><select id="ex_seg">
-        ${segOptions.map(s=>`<option value="${s.id}">${s.short}</option>`).join('')}
+        ${segOptions.map(s=>`<option value="${esc(s.id)}">${esc(s.short)}</option>`).join('')}
       </select></div>
       <div><label>支付方式</label><select id="ex_pay">
         <option>微信</option><option>现金</option><option>银行转账</option><option>支付宝</option><option>其他</option>
@@ -850,7 +942,7 @@ function renderExchange() {
     <div style="background:#E8F6F3;padding:12px;border-radius:8px;margin-bottom:12px">
       <div style="font-size:13px;font-weight:600;color:#148F77;margin-bottom:8px">收入（客户付出）</div>
       <div class="form-row">
-        <div><label>币种</label><select id="ex_in_cur" onchange="calcFromIncome()">${state.currencies.map(c=>`<option value="${c.code}">${c.code} ${c.name}</option>`).join('')}</select></div>
+        <div><label>币种</label><select id="ex_in_cur" onchange="calcFromIncome()">${state.currencies.map(c=>`<option value="${esc(c.code)}">${esc(c.code)} ${esc(c.name)}</option>`).join('')}</select></div>
         <div><label>金额</label><input type="number" id="ex_in_amt" step="0.01" placeholder="客户付出的金额" oninput="calcFromIncome()"></div>
         <div><label>进货汇率</label><input type="number" id="ex_in_rate" step="0.01" placeholder="如690" oninput="calcFromIncome()"></div>
       </div>
@@ -858,7 +950,7 @@ function renderExchange() {
     <div style="background:#FDEBD0;padding:12px;border-radius:8px;margin-bottom:12px">
       <div style="font-size:13px;font-weight:600;color:#E67E22;margin-bottom:8px">支出（你付出）</div>
       <div class="form-row">
-        <div><label>币种</label><select id="ex_out_cur" onchange="calcFromIncome();calcOutCost()">${state.currencies.map(c=>`<option value="${c.code}" ${c.code==='MGA'?'selected':''}>${c.code} ${c.name}</option>`).join('')}</select></div>
+        <div><label>币种</label><select id="ex_out_cur" onchange="calcFromIncome();calcOutCost()">${state.currencies.map(c=>`<option value="${esc(c.code)}" ${c.code==='MGA'?'selected':''}>${esc(c.code)} ${esc(c.name)}</option>`).join('')}</select></div>
         <div><label>金额</label><input type="number" id="ex_out_amt" step="0.01" placeholder="你付出的金额" oninput="calcOutCost()"></div>
         <div><label>当日汇率</label><input type="number" id="ex_rate" step="0.01" onchange="saveRateFromExchange()" title="修改后自动保存"></div>
         <div><label>出货成本（自动）</label><input type="number" id="ex_out_cost" step="0.01" placeholder="自动计算" readonly style="background:#f5f5f5"></div>
@@ -890,8 +982,8 @@ function renderRecentExchange() {
       const profit = t.type === '收入' ? rmb : -rmb;
       return `<tr>
         <td>${t.date}</td>
-        <td><span class="segment-tag" style="background:${seg.color}22;color:${seg.color}">${seg.short}</span></td>
-        <td>${t.desc}</td>
+        <td><span class="segment-tag" style="background:${esc(seg.color)}22;color:${esc(seg.color)}">${esc(seg.short)}</span></td>
+        <td>${esc(t.desc)}</td>
         <td class="${profit>=0?'positive':'negative'}">${formatMoney(profit)}</td>
       </tr>`;
     }).join('')}</tbody>
@@ -997,13 +1089,7 @@ async function saveExchange() {
     profitStr = ` | 利润${profit.toFixed(0)}`;
   }
 
-  const fullDesc = `[换汇] @' + (currentUser?.username || '') + '  ${desc} | IN:${inAmt}:${inCur} OUT:${outAmt}:${outCur}${profitStr}`;
-
-  // 更新该板块库存
-  const segInv = getSegInv(seg);
-  segInv[inCur] = (segInv[inCur] || 0) + inAmt;
-  segInv[outCur] = (segInv[outCur] || 0) - outAmt;
-  saveInventory();
+  const fullDesc = `[换汇] @${currentUser?.username || ''}  ${desc} | IN:${inAmt}:${inCur} OUT:${outAmt}:${outCur}${profitStr}`;
 
   try {
     // 写入利润记录
@@ -1015,6 +1101,14 @@ async function saveExchange() {
         amount: Math.abs(profit), pay, desc: fullDesc
       })
     });
+    try {
+      await applyInventoryMutations([
+        { seg, cur: inCur, delta: inAmt },
+        { seg, cur: outCur, delta: -outAmt }
+      ]);
+    } catch (invErr) {
+      alert('换汇记录已保存，但库存同步失败：' + invErr.message);
+    }
     alert(inCur === 'CNY' ? '已保存，利润：' + formatMoney(profit) : '已保存（外币换汇）');
     document.getElementById('ex_in_amt').value = '';
     document.getElementById('ex_out_amt').value = '';
@@ -1040,13 +1134,13 @@ function renderPendingReview() {
         const seg = getSegment(t.segment);
         return `<tr>
           <td>${t.date}</td>
-          <td>${seg.short}</td>
+          <td>${esc(seg.short)}</td>
           <td>${t.amount} ${t.currency}</td>
-          <td style="font-size:12px">${t.desc}</td>
+          <td style="font-size:12px">${esc(t.desc)}</td>
           <td>
-            <button class="btn btn-sm" onclick="editTx('${t.id}')">修改</button>
-            <button class="btn btn-sm btn-danger" onclick="deleteTx('${t.id}')">撤销</button>
-            <button class="btn btn-sm" onclick="clearMark('${t.id}')">忽略</button>
+            <button class="btn btn-sm" onclick="editTx('${esc(t.id)}')">修改</button>
+            <button class="btn btn-sm btn-danger" onclick="deleteTx('${esc(t.id)}')">撤销</button>
+            <button class="btn btn-sm" onclick="clearMark('${esc(t.id)}')">忽略</button>
           </td>
         </tr>`;
       }).join('')}</tbody>
@@ -1068,7 +1162,7 @@ function renderDashboard() {
   const totalInc = all.filter(t=>t.type==='收入').reduce((s,t)=>s+toRMB(t.amount,t.currency),0);
   const totalExp = all.filter(t=>t.type==='支出').reduce((s,t)=>s+toRMB(t.amount,t.currency),0);
   const profit = totalInc - totalExp;
-  const ym = new Date().toISOString().slice(0,7);
+  const ym = currentYearMonth();
   const mTx = all.filter(t=>t.date.startsWith(ym));
   const mInc = mTx.filter(t=>t.type==='收入').reduce((s,t)=>s+toRMB(t.amount,t.currency),0);
   const mExp = mTx.filter(t=>t.type==='支出').reduce((s,t)=>s+toRMB(t.amount,t.currency),0);
@@ -1077,7 +1171,7 @@ function renderDashboard() {
     const inc = txs.filter(t=>t.type==='收入').reduce((s,t)=>s+toRMB(t.amount,t.currency),0);
     const exp = txs.filter(t=>t.type==='支出').reduce((s,t)=>s+toRMB(t.amount,t.currency),0);
     const p = inc - exp;
-    return `<tr><td><span class="segment-tag" style="background:${seg.color}22;color:${seg.color}">${seg.short}</span></td>
+    return `<tr><td><span class="segment-tag" style="background:${esc(seg.color)}22;color:${esc(seg.color)}">${esc(seg.short)}</span></td>
       <td class="positive">${formatMoney(inc)}</td><td class="negative">${formatMoney(exp)}</td>
       <td class="${p>=0?'positive':'negative'}">${formatMoney(p)}</td><td>${txs.length}</td></tr>`;
   }).join('');
@@ -1106,13 +1200,13 @@ function renderEntry() {
     (currentUser && currentUser.role==="staff"
       ? state.segments.filter(s => getUserSegments().includes(s.id))
       : state.segments
-    ).map(s=>`<option value="${s.id}">${s.name}</option>`).join('')
+    ).map(s=>`<option value="${esc(s.id)}">${esc(s.name)}</option>`).join('')
   }</select></div>
       <div><label>类型</label><select id="e_type" onchange="updateCat()"><option>收入</option><option>支出</option></select></div>
       <div><label>分类</label><select id="e_cat">${defaultCats.map(c=>`<option>${c}</option>`).join('')}</select></div>
     </div>
     <div class="form-row">
-      <div><label>币种</label><select id="e_cur">${state.currencies.map(c=>`<option value="${c.code}">${c.code}</option>`).join('')}</select></div>
+      <div><label>币种</label><select id="e_cur">${state.currencies.map(c=>`<option value="${esc(c.code)}">${esc(c.code)}</option>`).join('')}</select></div>
       <div><label>金额</label><input type="number" id="e_amt" step="0.01"></div>
       <div><label>支付</label><select id="e_pay">${state.payMethods.map(p=>`<option>${p}</option>`).join('')}</select></div>
       <div><label>摘要</label><input type="text" id="e_desc"></div>
@@ -1146,22 +1240,25 @@ function renderLedger() {
   let list = getVisibleTransactions();
   if (currentSegmentFilter!=='all') list = list.filter(t=>t.segment===currentSegmentFilter);
   list.sort((a,b)=>b.date.localeCompare(a.date));
-  const opts = `<option value="all">全部</option>` + state.segments.map(s=>`<option value="${s.id}" ${currentSegmentFilter===s.id?'selected':''}>${s.short}</option>`).join('');
-  if (!list.length) return `<div class="card"><div class="empty">暂无记录</div></div>`;
-  return `<div class="card"><div style="margin-bottom:10px"><select onchange="currentSegmentFilter=this.value;render()">${opts}</select></div>
+  const opts = `<option value="all">全部</option>` + state.segments.map(s=>`<option value="${esc(s.id)}" ${currentSegmentFilter===s.id?'selected':''}>${esc(s.short)}</option>`).join('');
+  const toolbar = `<div style="margin-bottom:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap"><select onchange="currentSegmentFilter=this.value;render()">${opts}</select><button class="btn btn-primary" type="button" onclick="exportTransactionsCsv()">导出 Excel（CSV）</button></div>`;
+  if (!list.length) return `<div class="card">${toolbar}<div class="empty">暂无记录</div></div>`;
+  return `<div class="card">${toolbar}
     <div style="overflow-x:auto"><table><thead><tr><th>日期</th><th>板块</th><th>操作人</th><th>类型</th><th>摘要</th><th>金额</th><th>人民币</th><th>操作</th></tr></thead>
     <tbody>${list.map(t=>{
       const seg = getSegment(t.segment);
       const rmb = toRMB(t.amount, t.currency);
-      return `<tr><td>${t.date}</td><td><span class="segment-tag" style="background:${seg.color}22;color:${seg.color}">${seg.short}</span></td>
-        <td><span class="badge ${t.type==='收入'?'badge-income':'badge-expense'}">${t.type}</span></td>
-        <td>${t.desc||t.category}</td><td>${t.amount} ${t.currency}</td>
+      const operator = (t.desc||'').match(/@([^\s]+)/)?.[1] || '-';
+      return `<tr><td>${esc(t.date)}</td><td><span class="segment-tag" style="background:${esc(seg.color)}22;color:${esc(seg.color)}">${esc(seg.short)}</span></td>
+        <td>${esc(operator)}</td>
+        <td><span class="badge ${t.type==='收入'?'badge-income':'badge-expense'}">${esc(t.type)}</span></td>
+        <td>${esc(t.desc||t.category)}</td><td>${esc(t.amount)} ${esc(t.currency)}</td>
         <td class="${t.type==='收入'?'positive':'negative'}">${formatMoney(rmb)}</td>
         <td>
           ${currentUser && currentUser.role==='admin' 
-            ? `<button class="btn btn-sm" onclick="editTx('${t.id}')">改</button>
-               <button class="btn btn-sm btn-danger" onclick="deleteTx('${t.id}')">撤单</button>`
-            : `<button class="btn btn-sm" style="background:#F39C12;color:white" onclick="markError('${t.id}')">标错</button>`
+            ? `<button class="btn btn-sm" onclick="editTx('${esc(t.id)}')">改</button>
+               <button class="btn btn-sm btn-danger" onclick="deleteTx('${esc(t.id)}')">撤单</button>`
+            : `<button class="btn btn-sm" style="background:#F39C12;color:white" onclick="markError('${esc(t.id)}')">标错</button>`
           }
           ${t.desc && t.desc.includes('[待审]') ? '<span style="color:#E67E22;font-size:11px">待审</span>' : ''}
         </td></tr>`;
@@ -1171,7 +1268,7 @@ function renderLedger() {
 function renderDaily() {
   const segFilter = document.getElementById('dailySegFilter')?.value || '';
   const txs = getVisibleTransactions().filter(t => !segFilter || t.segment === segFilter);
-  const segOptions = state.segments.map(s => `<option value="${s.id}" ${segFilter===s.id?'selected':''}>${s.short}</option>`).join('');
+  const segOptions = state.segments.map(s => `<option value="${esc(s.id)}" ${segFilter===s.id?'selected':''}>${esc(s.short)}</option>`).join('');
   
   // 按日期分组，显示每条明细
   const byDate = {};
@@ -1183,12 +1280,13 @@ function renderDaily() {
   const dates = Object.keys(byDate).sort().reverse();
   
   let html = `<div class="card"><h2>每日汇总</h2>
-    <div style="margin-bottom:10px">
+    <div style="margin-bottom:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
       <label>板块：</label>
       <select id="dailySegFilter" onchange="render()">
         <option value="">全部</option>
         ${segOptions}
       </select>
+      <button class="btn btn-primary" type="button" onclick="exportTransactionsCsv()">导出 Excel（CSV）</button>
     </div>`;
   
   if (!dates.length) {
@@ -1216,10 +1314,10 @@ function renderDaily() {
           const r = toRMB(t.amount, t.currency);
           const origAmt = t.currency === 'CNY' ? '' : ` <span style="color:#7F8C8D;font-size:11px">(${t.amount.toLocaleString()} ${t.currency})</span>`;
           return `<tr>
-            <td><span class="segment-tag" style="background:${seg.color}22;color:${seg.color}">${seg.short}</span></td>
-            <td style="font-size:11px;color:#7F8C8D">${(t.desc||'').match(/@(\w+)/)?.[1] || '-'}</td>
-            <td><span class="badge ${t.type==='收入'?'badge-income':'badge-expense'}">${t.type}</span></td>
-            <td style="font-size:12px">${t.desc||'-'}</td>
+            <td><span class="segment-tag" style="background:${esc(seg.color)}22;color:${esc(seg.color)}">${esc(seg.short)}</span></td>
+            <td style="font-size:11px;color:#7F8C8D">${esc((t.desc||'').match(/@([^\s]+)/)?.[1] || '-')}</td>
+            <td><span class="badge ${t.type==='收入'?'badge-income':'badge-expense'}">${esc(t.type)}</span></td>
+            <td style="font-size:12px">${esc(t.desc||'-')}</td>
             <td class="${t.type==='收入'?'positive':'negative'}">${formatMoney(r)}${origAmt}</td>
           </tr>`;
         }).join('')}</tbody>
@@ -1248,7 +1346,7 @@ function renderDaily() {
 function renderMonthly() {
   const segFilter = document.getElementById('monthlySegFilter')?.value || '';
   const txs = getVisibleTransactions().filter(t => !segFilter || t.segment === segFilter);
-  const segOptions = state.segments.map(s => `<option value="${s.id}" ${segFilter===s.id?'selected':''}>${s.short}</option>`).join('');
+  const segOptions = state.segments.map(s => `<option value="${esc(s.id)}" ${segFilter===s.id?'selected':''}>${esc(s.short)}</option>`).join('');
   
   // 按月份分组，再按日期汇总
   const byMonth = {};
@@ -1265,12 +1363,13 @@ function renderMonthly() {
   const months = Object.keys(byMonth).sort().reverse();
   
   let html = `<div class="card"><h2>每月汇总</h2>
-    <div style="margin-bottom:10px">
+    <div style="margin-bottom:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
       <label>板块：</label>
       <select id="monthlySegFilter" onchange="render()">
         <option value="">全部</option>
         ${segOptions}
       </select>
+      <button class="btn btn-primary" type="button" onclick="exportTransactionsCsv()">导出 Excel（CSV）</button>
     </div>`;
   
   if (!months.length) {
@@ -1339,10 +1438,10 @@ function renderSettings() {
       <div style="overflow-x:auto"><table>
         <thead><tr><th>币种</th><th>名称</th><th>汇率</th></tr></thead>
         <tbody>${state.currencies.map(c => `<tr>
-          <td>${c.code}</td>
-          <td>${c.name}${c.code==='MGA' ? ' <span style="color:#148F77;font-size:11px">(基准)</span>' : ' <span style="color:#E67E22;font-size:11px">(1外币=?MGA)</span>'}</td>
-          <td><input type="number" step="0.01" value="${c.rate}" style="width:100px" onchange="updateRate('${c.code}', this.value)"></td>
-          <td><button class="btn btn-sm btn-danger" onclick="deleteCurrency('${c.code}')">删</button></td>
+          <td>${esc(c.code)}</td>
+          <td>${esc(c.name)}${c.code==='MGA' ? ' <span style="color:#148F77;font-size:11px">(基准)</span>' : ' <span style="color:#E67E22;font-size:11px">(1外币=?MGA)</span>'}</td>
+          <td><input type="number" step="0.01" value="${c.rate}" style="width:100px" onchange="updateRate('${esc(c.code)}', this.value)"></td>
+          <td><button class="btn btn-sm btn-danger" onclick="deleteCurrency('${esc(c.code)}')">删</button></td>
         </tr>`).join('')}</tbody>
         </table>
         <div class="form-row" style="margin-top:10px">
@@ -1359,7 +1458,7 @@ function renderSettings() {
       <p style="font-size:12px;color:#7F8C8D;margin-bottom:8px">选择哪些板块出现在「换汇录入」中</p>
       <div style="margin-bottom:10px">
         ${state.segments.map(s => `<label style="display:inline-block;margin:4px 12px 4px 0;font-size:13px">
-          <input type="checkbox" ${((state.fxSegments||[]).includes(s.id))?'checked':''} onchange="toggleFxSeg('${s.id}', this.checked)"> ${s.short}
+          <input type="checkbox" ${((state.fxSegments||[]).includes(s.id))?'checked':''} onchange="toggleFxSeg('${esc(s.id)}', this.checked)"> ${esc(s.short)}
         </label>`).join('')}
       </div>
     </div>`;
@@ -1369,10 +1468,10 @@ function renderSettings() {
       <div style="overflow-x:auto"><table>
         <thead><tr><th>ID</th><th>名称</th><th>简称</th><th>操作</th></tr></thead>
         <tbody>${state.segments.map(s => `<tr>
-          <td>${s.id}</td><td>${s.name}</td><td>${s.short}</td>
+          <td>${esc(s.id)}</td><td>${esc(s.name)}</td><td>${esc(s.short)}</td>
           <td>
-            <button class="btn btn-sm" onclick="editSegment('${s.id}')">改名</button>
-            <button class="btn btn-sm btn-danger" onclick="deleteSegment('${s.id}')">删除</button>
+            <button class="btn btn-sm" onclick="editSegment('${esc(s.id)}')">改名</button>
+            <button class="btn btn-sm btn-danger" onclick="deleteSegment('${esc(s.id)}')">删除</button>
           </td>
         </tr>`).join('')}</tbody>
       </table></div>
@@ -1388,13 +1487,13 @@ function renderSettings() {
       <div style="overflow-x:auto"><table>
         <thead><tr><th>账号</th><th>名称</th><th>角色</th><th>所属板块</th><th>操作</th></tr></thead>
         <tbody>${Object.entries(USERS).map(([k,v]) => `<tr>
-          <td>${k}</td><td>${v.name}</td><td>${v.role}</td>
+          <td>${esc(k)}</td><td>${esc(v.name)}</td><td>${esc(v.role)}</td>
           <td>${(v.segments && v.segments.length) ? v.segments.map(id => (state.segments.find(s=>s.id===id)||{}).short || id).join(', ') : (v.segment || '全部')}</td>
           <td>
-            ${k !== 'admin' ? `<button class="btn btn-sm" onclick="editUserPwd('${k}')">改密</button>
-            <button class="btn btn-sm" onclick="editUserSegments('${k}')">改权限</button>
-            <button class="btn btn-sm" onclick="toggleInvPerm('${k}')">${USERS[k].canInventory ? '取消库存' : '授权库存'}</button>
-            <button class="btn btn-sm btn-danger" onclick="deleteUser('${k}')">删除</button>` : '-'}
+            ${k !== 'admin' ? `<button class="btn btn-sm" onclick="editUserPwd('${esc(k)}')">改密</button>
+            <button class="btn btn-sm" onclick="editUserSegments('${esc(k)}')">改权限</button>
+            <button class="btn btn-sm" onclick="toggleInvPerm('${esc(k)}')">${USERS[k].canInventory ? '取消库存' : '授权库存'}</button>
+            <button class="btn btn-sm btn-danger" onclick="deleteUser('${esc(k)}')">删除</button>` : '-'}
           </td>
         </tr>`).join('')}</tbody>
       </table></div>
@@ -1403,7 +1502,7 @@ function renderSettings() {
         <div><label>密码</label><input type="text" id="newUserPwd" placeholder="密码"></div>
         <div><label>名称</label><input type="text" id="newUserName" placeholder="显示名"></div>
         <div><label>板块（可多选）</label><select id="newUserSeg" multiple style="height:80px">
-          ${state.segments.map(s=>`<option value="${s.id}">${s.short}</option>`).join('')}
+          ${state.segments.map(s=>`<option value="${esc(s.id)}">${esc(s.short)}</option>`).join('')}
         </select></div>
         <div style="align-self:end"><button class="btn btn-primary" onclick="addUser()">添加账户</button></div>
       </div></div>`;
@@ -1411,16 +1510,17 @@ function renderSettings() {
 
   if (isAdmin) {
     html += `<div class="card"><h2>货币库存调整</h2>
-      <p style="font-size:12px;color:#7F8C8D;margin-bottom:8px">手动修正库存（如初始资金、盘点差异）</p>
+      <p style="font-size:12px;color:#7F8C8D;margin-bottom:8px">手动修正库存（如初始资金、盘点差异）。必须选择板块，数量会加到该板块的库存上。</p>
       <div class="form-row">
-        <div><label>币种</label><select id="inv_cur">${state.currencies.map(c=>`<option value="${c.code}">${c.code}</option>`).join('')}</select></div>
+        <div><label>板块</label><select id="inv_seg">${state.segments.map(s=>`<option value="${esc(s.id)}">${esc(s.short)}</option>`).join('')}</select></div>
+        <div><label>币种</label><select id="inv_cur">${state.currencies.map(c=>`<option value="${esc(c.code)}">${esc(c.code)}</option>`).join('')}</select></div>
         <div><label>调整数量（正增负减）</label><input type="number" id="inv_amt" step="0.01"></div>
         <div style="align-self:end"><button class="btn btn-primary" onclick="adjustInventory()">调整</button></div>
       </div>
     </div>`;
   }
   html += `<div class="card"><h2>当前账户</h2>
-    <p style="font-size:13px">登录：${currentUser ? currentUser.name : '-'}（${currentUser ? currentUser.username : ''}）</p>
+    <p style="font-size:13px">登录：${esc(currentUser ? currentUser.name : '-')}（${esc(currentUser ? currentUser.username : '')}）</p>
     <div style="margin-top:10px">
       <button class="btn" onclick="changeMyPassword()">修改我的密码</button>
       <button class="btn" style="margin-left:8px" onclick="logout()">退出登录</button>
@@ -1438,39 +1538,40 @@ function renderSettings() {
 
 
 
-function setInventory() {
+async function setInventory() {
   const seg = document.getElementById('inv_seg2').value;
   const cur = document.getElementById('inv_cur2').value;
   const val = parseFloat(document.getElementById('inv_set2').value);
   if (!seg || !cur || isNaN(val)) { alert('请填写完整'); return; }
-  const segInv = getSegInv(seg);
-  segInv[cur] = val;
-  saveInventory();
-  alert(seg + ' 的 ' + cur + ' 已设为 ' + val);
-  render();
+  try {
+    await applyInventorySet(seg, cur, val);
+    alert(seg + ' 的 ' + cur + ' 已设为 ' + val);
+    render();
+  } catch(e) { alert('库存保存失败：' + e.message); }
 }
 
-function adjustInventory2() {
+async function adjustInventory2() {
   const cur = document.getElementById('inv_cur2').value;
   const amt = parseFloat(document.getElementById('inv_amt2').value);
   const seg = document.getElementById('inv_seg2')?.value;
   if (!cur || isNaN(amt) || !seg) { alert('请填写完整'); return; }
-  const segInv = getSegInv(seg);
-  segInv[cur] = (segInv[cur] || 0) + amt;
-  saveInventory();
-  alert(seg + ' 的 ' + cur + ' 已调整');
-  render();
+  try {
+    await applyInventoryMutations([{ seg, cur, delta: amt }]);
+    alert(seg + ' 的 ' + cur + ' 已调整');
+    render();
+  } catch(e) { alert('库存保存失败：' + e.message); }
 }
 
-function adjustInventory() {
+async function adjustInventory() {
   const cur = document.getElementById('inv_cur').value;
   const amt = parseFloat(document.getElementById('inv_amt').value);
-  if (!cur || isNaN(amt)) { alert('请填写'); return; }
-  if (!state.inventory[cur]) state.inventory[cur] = 0;
-  state.inventory[cur] += amt;
-  saveInventory();
-  alert(cur + ' 库存已调整为 ' + state.inventory[cur]);
-  render();
+  const seg = document.getElementById('inv_seg')?.value;
+  if (!cur || isNaN(amt) || !seg) { alert('请填写板块、币种和数量'); return; }
+  try {
+    await applyInventoryMutations([{ seg, cur, delta: amt }]);
+    alert(seg + ' 的 ' + cur + ' 已调整');
+    render();
+  } catch(e) { alert('库存保存失败：' + e.message); }
 }
 
 
@@ -1609,7 +1710,7 @@ function editUserSegments(id) {
   const current = USERS[id].segments || (USERS[id].segment ? [USERS[id].segment] : []);
   const checks = state.segments.map(s => 
     `<label style="display:block;margin:6px 0;font-size:14px">
-      <input type="checkbox" value="${s.id}" ${current.includes(s.id)?'checked':''}> ${s.short}
+      <input type="checkbox" value="${esc(s.id)}" ${current.includes(s.id)?'checked':''}> ${esc(s.short)}
     </label>`
   ).join('');
   
@@ -1621,7 +1722,7 @@ function editUserSegments(id) {
     <div id="permChecks">${checks}</div>
     <div style="margin-top:16px;text-align:right">
       <button onclick="document.getElementById('permModal').remove()" style="padding:8px 16px;margin-right:8px;border:1px solid #ccc;background:white;border-radius:4px;cursor:pointer">取消</button>
-      <button onclick="savePermModal('${id}')" style="padding:8px 16px;background:#1F4E79;color:white;border:none;border-radius:4px;cursor:pointer">保存</button>
+      <button onclick="savePermModal('${esc(id)}')" style="padding:8px 16px;background:#1F4E79;color:white;border:none;border-radius:4px;cursor:pointer">保存</button>
     </div>
   </div>`;
   document.body.appendChild(modal);
@@ -1648,70 +1749,6 @@ function deleteUser(id) {
 
 
 
-function setInventory() {
-  const seg = document.getElementById('inv_seg2').value;
-  const cur = document.getElementById('inv_cur2').value;
-  const val = parseFloat(document.getElementById('inv_set2').value);
-  if (!seg || !cur || isNaN(val)) { alert('请填写完整'); return; }
-  const segInv = getSegInv(seg);
-  segInv[cur] = val;
-  saveInventory();
-  alert(seg + ' 的 ' + cur + ' 已设为 ' + val);
-  render();
-}
-
-function adjustInventory2() {
-  const cur = document.getElementById('inv_cur2').value;
-  const amt = parseFloat(document.getElementById('inv_amt2').value);
-  const seg = document.getElementById('inv_seg2')?.value;
-  if (!cur || isNaN(amt) || !seg) { alert('请填写完整'); return; }
-  const segInv = getSegInv(seg);
-  segInv[cur] = (segInv[cur] || 0) + amt;
-  saveInventory();
-  alert(seg + ' 的 ' + cur + ' 已调整');
-  render();
-}
-
-function adjustInventory() {
-  const cur = document.getElementById('inv_cur').value;
-  const amt = parseFloat(document.getElementById('inv_amt').value);
-  if (!cur || isNaN(amt)) { alert('请填写'); return; }
-  if (!state.inventory[cur]) state.inventory[cur] = 0;
-  state.inventory[cur] += amt;
-  saveInventory();
-  alert(cur + ' 库存已调整为 ' + state.inventory[cur]);
-  render();
-}
-
-
-function addCurrency() {
-  const code = document.getElementById('newCurCode').value.trim().toUpperCase();
-  const name = document.getElementById('newCurName').value.trim();
-  const rate = parseFloat(document.getElementById('newCurRate').value);
-  const inv = document.getElementById('newCurInv').checked;
-  if (!code || !name || isNaN(rate)) { alert('请填写完整'); return; }
-  if (state.currencies.find(c => c.code === code)) { alert('已存在'); return; }
-  state.currencies.push({ code, name, rate, inverted: inv });
-  localStorage.setItem('custom_rates', JSON.stringify(state.currencies));
-  render();
-}
-function deleteCurrency(code) {
-  if (code === 'CNY') { alert('人民币不能删除'); return; }
-  if (!confirm('删除 ' + code + '？')) return;
-  state.currencies = state.currencies.filter(c => c.code !== code);
-  localStorage.setItem('custom_rates', JSON.stringify(state.currencies));
-  render();
-}
-
-function updateRate(code, val) {
-  const c = state.currencies.find(x => x.code === code);
-  if (c) {
-    c.rate = parseFloat(val) || 1;
-    // 汇率存在本地，刷新后保持（如需持久化可扩展）
-    localStorage.setItem('custom_rates', JSON.stringify(state.currencies));
-    saveSettingsToCloud();
-  }
-}
 function logout() {
   sessionStorage.removeItem("user");
   location.reload();
