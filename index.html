@@ -767,12 +767,12 @@ async function saveLogistics() {
     const peer = parseFloat(document.getElementById('lg_peer').value) || 0;
     const actual = parseFloat(document.getElementById('lg_actual').value) || 0;
     if (!date || actual <= 0 || price <= 0) { alert('请填写日期、重量和单价'); return; }
-    desc = `[物流] @' + (currentUser?.username || '') + '  ${dir} ${type} | 总重${total}kg 同行${peer}kg 实际${actual}kg ×¥${price} ${note}`;
+    desc = `[物流] @${currentUser?.username || ''} ${dir} ${type} | 总重${total}kg 同行${peer}kg 实际${actual}kg ×¥${price} ${note}`;
   } else {
     const qty = parseFloat(document.getElementById('lg_qty').value) || 0;
     const item = document.getElementById('lg_item').value.trim() || '物品';
     if (!date || qty <= 0 || price <= 0) { alert('请填写日期、数量和单价'); return; }
-    desc = `[物流] @' + (currentUser?.username || '') + '  ${dir} ${type} | ${item} ${qty}台 ×¥${price} ${note}`;
+    desc = `[物流] @${currentUser?.username || ''} ${dir} ${type} | ${item} ${qty}台 ×¥${price} ${note}`;
   }
 
   try {
@@ -1031,7 +1031,7 @@ async function saveExchange() {
     profitStr = ` | 利润${profit.toFixed(0)}`;
   }
 
-  const fullDesc = `[换汇] @' + (currentUser?.username || '') + '  ${desc} | IN:${inAmt}:${inCur} OUT:${outAmt}:${outCur}${profitStr}`;
+  const fullDesc = `[换汇] @${currentUser?.username || ''}  ${desc} | IN:${inAmt}:${inCur} OUT:${outAmt}:${outCur}${profitStr}`;
 
   // 更新该板块库存
   const segInv = getSegInv(seg);
