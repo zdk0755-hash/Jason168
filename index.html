@@ -612,7 +612,15 @@ function canAdjustInv() {
 }
 
 function formatMoney(n) { return n==null||isNaN(n)?'-':'¥'+Number(n).toLocaleString('zh-CN',{minimumFractionDigits:2,maximumFractionDigits:2}); }
-function today() { return new Date().toISOString().slice(0,10); }
+function today() { 
+  // 中国时间 UTC+8
+  const d = new Date(Date.now() + 8 * 60 * 60 * 1000);
+  return d.getUTCFullYear() + '-' + String(d.getUTCMonth()+1).padStart(2,'0') + '-' + String(d.getUTCDate()).padStart(2,'0');
+}
+function thisMonth() {
+  const d = new Date(Date.now() + 8 * 60 * 60 * 1000);
+  return d.getUTCFullYear() + '-' + String(d.getUTCMonth()+1).padStart(2,'0');
+}
 function getSegment(id) { return state.segments.find(s=>s.id===id)||{short:id,color:'#999'}; }
 function getRate(code) { 
   if (!code || code === 'CNY') return 1;
@@ -666,6 +674,19 @@ function showPage(page) {
   currentPage = page;
   document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active', b.dataset.page===page));
   render();
+}
+
+
+function initPageFields() {
+  if (currentPage === 'tobacco') {
+    setTimeout(() => { if (document.getElementById('tb_type')) toggleTobaccoFields(); }, 50);
+  }
+  if (currentPage === 'logistics') {
+    setTimeout(() => { if (document.getElementById('lg_mode')) toggleLogisticsMode(); }, 50);
+  }
+  if (currentPage === 'exchange') {
+    setTimeout(() => { if (document.getElementById('ex_in_cur')) calcFromIncome(); }, 50);
+  }
 }
 
 function render() {
@@ -1009,6 +1030,7 @@ function renderTobacco() {
     <h2>最近记录</h2>
     ${renderTobaccoRecords()}
   </div>`;
+  setTimeout(() => toggleTobaccoFields(), 50);
 }
 
 
@@ -1674,7 +1696,7 @@ function renderDashboard() {
   const totalInc = all.filter(t=>t.type==='收入').reduce((s,t)=>s+toRMB(t.amount,t.currency),0);
   const totalExp = all.filter(t=>t.type==='支出').reduce((s,t)=>s+toRMB(t.amount,t.currency),0);
   const profit = totalInc - totalExp;
-  const ym = new Date().toISOString().slice(0,7);
+  const ym = thisMonth();
   const mTx = all.filter(t=>t.date.startsWith(ym));
   const mInc = mTx.filter(t=>t.type==='收入').reduce((s,t)=>s+toRMB(t.amount,t.currency),0);
   const mExp = mTx.filter(t=>t.type==='支出').reduce((s,t)=>s+toRMB(t.amount,t.currency),0);
