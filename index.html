@@ -2053,7 +2053,7 @@ function renderEntry() {
     (currentUser && currentUser.role==="staff"
       ? state.segments.filter(s => getUserSegments().includes(s.id))
       : state.segments
-    ).filter(s => !hasDedicatedPage(s.id)).map(s=>`<option value="${s.id}">${s.name}</option>`).join('')
+    ).filter(s => s.id === 'restaurant' || s.id === 'exchange').map(s=>`<option value="${s.id}">${s.name}</option>`).join('')
   }</select></div>
       <div><label>类型</label><select id="e_type" onchange="updateCat()"><option>收入</option><option>支出</option></select></div>
       <div><label>分类</label><select id="e_cat">${defaultCats.map(c=>`<option>${c}</option>`).join('')}</select></div>
