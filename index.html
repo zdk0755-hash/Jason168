@@ -1362,7 +1362,7 @@ function renderDaily() {
 
 function renderMonthly() {
   const segFilter = document.getElementById('monthlySegFilter')?.value || '';
-  const typeFilter = document.getElementById('dailyTypeFilter')?.value || '';
+  const typeFilter = document.getElementById('monthlyTypeFilter')?.value || '';
   const txs = getVisibleTransactions().filter(t => (!segFilter || t.segment === segFilter) && (!typeFilter || t.type === typeFilter));
   const segOptions = state.segments.map(s => `<option value="${s.id}" ${segFilter===s.id?'selected':''}>${s.short}</option>`).join('');
   
