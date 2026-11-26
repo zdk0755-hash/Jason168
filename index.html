@@ -1052,12 +1052,7 @@ function renderTobacco() {
         <div id="tb_price_wrap"><label>单价</label>
           <div style="display:flex;gap:4px">
             <input type="number" id="tb_price" step="0.01" placeholder="销售单价" style="flex:1">
-            <select id="tb_cur" style="width:80px">
-              <option value="MGA">MGA</option>
-              <option value="CNY">CNY</option>
-              <option value="USD">USD</option>
-              <option value="EUR">EUR</option>
-            </select>
+            <select id="tb_cur" style="width:80px">${state.currencies.map(c=>`<option value="${c.code}" ${c.code==='MGA'?'selected':''}>${c.code}</option>`).join('')}</select>
           </div>
         </div>
         <div id="tb_cost_wrap" style="display:none"><label>成本（元）</label><input type="number" id="tb_cost" step="0.01" placeholder="进货成本"></div>
@@ -1290,12 +1285,7 @@ function renderLogistics() {
     <div class="form-row">
       <div><label>日期</label><input type="date" id="lg_in_date" value="${today()}"></div>
       <div><label>金额</label><input type="number" id="lg_in_amt" step="0.01" placeholder="收入金额"></div>
-      <div><label>币种</label><select id="lg_in_cur" style="padding:8px">
-        <option value="MGA">MGA</option>
-        <option value="CNY">CNY</option>
-        <option value="USD">USD</option>
-        <option value="EUR">EUR</option>
-      </select></div>
+      <div><label>币种</label><select id="lg_in_cur" style="padding:8px">${state.currencies.map(c=>`<option value="${c.code}" ${c.code==='MGA'?'selected':''}>${c.code}</option>`).join('')}</select></div>
     </div>
     <div style="margin-top:8px"><label>备注</label><input type="text" id="lg_in_note" placeholder="如：客户付款"></div>
     <button class="btn btn-success" style="margin-top:10px" onclick="saveLogisticsIncome()">保存收入</button>
@@ -2490,6 +2480,8 @@ function addCurrency() {
   if (state.currencies.find(c => c.code === code)) { alert('已存在'); return; }
   state.currencies.push({ code, name, rate, inverted: inv });
   localStorage.setItem('custom_rates', JSON.stringify(state.currencies));
+  saveSettingsToCloud();
+  alert('已添加 ' + code);
   render();
 }
 function deleteCurrency(code) {
@@ -2497,6 +2489,7 @@ function deleteCurrency(code) {
   if (!confirm('删除 ' + code + '？')) return;
   state.currencies = state.currencies.filter(c => c.code !== code);
   localStorage.setItem('custom_rates', JSON.stringify(state.currencies));
+  saveSettingsToCloud();
   render();
 }
 
