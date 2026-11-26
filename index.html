@@ -524,10 +524,15 @@ function editTx(id) {
 }
 
 async function deleteTx(id) {
-  if (!confirm('确定撤单？此操作不可恢复')) return;
+  if (!confirm('确定撤单？撤单后记录保留但不再计入统计')) return;
   const t = state.transactions.find(x => x.id == id);
   try {
-    await sbFetch('transactions?id=eq.' + id, { method: 'DELETE' });
+    // 标记为已撤单，不删除
+    const newDesc = (t.desc || '') + ' [已撤单]';
+    await sbFetch('transactions?id=eq.' + id, { 
+      method: 'PATCH', 
+      body: JSON.stringify({ desc: newDesc, amount: 0 })
+    });
     // 撤单时反向调整库存
     if (t && t.segment) {
       const segInv = getSegInv(t.segment);
@@ -1253,10 +1258,11 @@ function renderLedger() {
     <tbody>${list.map(t=>{
       const seg = getSegment(t.segment);
       const rmb = toRMB(t.amount, t.currency);
-      return `<tr><td>${t.date}</td><td><span class="segment-tag" style="background:${seg.color}22;color:${seg.color}">${seg.short}</span></td>
+      const isCancelled = (t.desc||'').includes('[已撤单]');
+      return `<tr style="${isCancelled?'opacity:0.5':''}"><td>${t.date}</td><td><span class="segment-tag" style="background:${seg.color}22;color:${seg.color}">${seg.short}</span></td>
         <td><span class="badge ${t.type==='收入'?'badge-income':'badge-expense'}">${t.type}</span></td>
         <td>${t.desc||t.category}</td><td>${t.amount} ${t.currency}</td>
-        <td class="${t.type==='收入'?'positive':'negative'}">${formatMoney(rmb)}</td>
+        <td class="${t.type==='收入'?'positive':'negative'}">${isCancelled?'<span style="color:#C0392B">已撤单</span>':formatMoney(rmb)}</td>
         <td>
           ${currentUser && currentUser.role==='admin' 
             ? `<button class="btn btn-sm" onclick="editTx('${t.id}')">改</button>
@@ -1306,6 +1312,7 @@ function renderDaily() {
     const items = byDate[d];
     let inc = 0, exp = 0;
     items.forEach(t => {
+      if ((t.desc||'').includes('[已撤单]')) return; // 撤单不计入
       const r = toRMB(t.amount, t.currency);
       if (t.type === '收入') inc += r; else exp += r;
     });
@@ -1320,13 +1327,15 @@ function renderDaily() {
         <tbody>${items.map(t => {
           const seg = getSegment(t.segment);
           const r = toRMB(t.amount, t.currency);
+          const isCancelled = (t.desc||'').includes('[已撤单]');
           const origAmt = t.currency === 'CNY' ? '' : ` <span style="color:#7F8C8D;font-size:11px">(${t.amount.toLocaleString()} ${t.currency})</span>`;
-          return `<tr>
+          const cancelTag = isCancelled ? ' <span style="color:#C0392B;font-size:11px">[已撤单]</span>' : '';
+          return `<tr style="${isCancelled?'opacity:0.5;text-decoration:line-through':''}">
             <td><span class="segment-tag" style="background:${seg.color}22;color:${seg.color}">${seg.short}</span></td>
             <td style="font-size:11px;color:#7F8C8D">${(t.desc||'').match(/@(\w+)/)?.[1] || '-'}</td>
             <td><span class="badge ${t.type==='收入'?'badge-income':'badge-expense'}">${t.type}</span></td>
             <td style="font-size:12px">${t.desc||'-'}</td>
-            <td class="${t.type==='收入'?'positive':'negative'}">${formatMoney(r)}${origAmt}</td>
+            <td class="${t.type==='收入'?'positive':'negative'}">${isCancelled?'-':formatMoney(r)}${origAmt}${cancelTag}</td>
           </tr>`;
         }).join('')}</tbody>
       </table></div>
@@ -1366,6 +1375,7 @@ function renderMonthly() {
     if (!byMonth[m][t.date]) byMonth[m][t.date] = {inc:0, exp:0};
     const r = toRMB(t.amount, t.currency);
     if (isNaN(r)) return;
+    if ((t.desc||'').includes('[已撤单]')) return; // 撤单不计入
     if (t.type === '收入') byMonth[m][t.date].inc += r;
     else byMonth[m][t.date].exp += r;
   });
