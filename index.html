@@ -1155,7 +1155,8 @@ async function saveTobacco() {
   const salesAmt = type === '销售' ? qty * price : 0;
   const costAmt = type === '销售' ? qty * unitCost : (type === '入库' ? qty * unitCost : 0);
   const profit = salesAmt - costAmt;
-  const desc = `[烟酒] @${currentUser?.username||''} ${type} ${name} ${qty}${type==='销售'?'×¥'+price+' 成本¥'+cost+' 利润¥'+profit.toFixed(0):''} ${note}`;
+  const costStr = type === '销售' ? '×'+price+' '+(document.getElementById('tb_cur')?.value||'MGA') : '';
+  const desc = `[烟酒] @${currentUser?.username||''} ${type} ${name} ${qty} ${costStr} ${note}`;
   
   try {
     // 销售收入
