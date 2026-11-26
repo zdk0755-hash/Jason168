@@ -1033,6 +1033,18 @@ async function loadTobaccoInv() {
 
 
 
+
+function getRefPrices() {
+  const saved = localStorage.getItem('tobacco_ref_price');
+  return saved ? JSON.parse(saved) : {};
+}
+function saveRefPrice(name, price) {
+  const prices = getRefPrices();
+  prices[name] = price;
+  localStorage.setItem('tobacco_ref_price', JSON.stringify(prices));
+  saveSetting('tobacco_ref_price', prices);
+}
+
 function getHiddenItems() {
   const saved = localStorage.getItem('tobacco_hidden');
   return saved ? JSON.parse(saved) : [];
@@ -1111,14 +1123,19 @@ function renderTobacco() {
     <div style="background:#E8F6F3;padding:12px;border-radius:8px;margin:12px 0">
       <div class="form-row">
         <div><label>品名</label>
-          <input type="text" id="tb_name" list="tb_products" placeholder="输入或选择品名" onchange="autoFillCost()" oninput="autoFillCost()">
+          <input type="text" id="tb_name" list="tb_products" placeholder="输入或选择品名" onchange="autoFillCost();showRefPrice()" oninput="autoFillCost();showRefPrice()">
           <datalist id="tb_products">${products.map(p=>`<option value="${p}">`).join('')}</datalist>
         </div>
         <div><label>数量</label><input type="number" id="tb_qty" step="1" placeholder="数量" min="1"></div>
-        <div id="tb_price_wrap"><label>单价</label>
+        <div id="tb_price_wrap"><label>单价 <span id="tb_ref_display" style="color:#E67E22;font-size:11px"></span></label>
           <div style="display:flex;gap:4px">
-            <input type="number" id="tb_price" step="0.01" placeholder="销售单价" style="flex:1">
-            <select id="tb_cur" style="width:80px">${state.currencies.map(c=>`<option value="${c.code}" ${c.code==='MGA'?'selected':''}>${c.code}</option>`).join('')}</select>
+            <input type="number" id="tb_price" step="0.01" placeholder="销售单价" style="flex:1" onfocus="showRefPrice()">
+            <select id="tb_cur" style="width:70px">${state.currencies.map(c=>`<option value="${c.code}" ${c.code==='MGA'?'selected':''}>${c.code}</option>`).join('')}</select>
+          </div>
+          <div style="display:flex;gap:4px;margin-top:4px;align-items:center">
+            <span style="font-size:11px;color:#7F8C8D">参考价:</span>
+            <input type="number" id="tb_ref_price" step="0.01" placeholder="设置" style="width:80px;padding:4px;font-size:12px">
+            <button type="button" onclick="setRefPrice()" style="padding:4px 8px;font-size:11px;background:#E67E22;color:white;border:none;border-radius:4px;cursor:pointer">存</button>
           </div>
         </div>
         <div id="tb_cost_wrap" style="display:none"><label>成本（元）</label><input type="number" id="tb_cost" step="0.01" placeholder="进货成本"></div>
@@ -1145,6 +1162,30 @@ function renderTobacco() {
   setTimeout(() => toggleTobaccoFields(), 50);
 }
 
+
+
+function showRefPrice() {
+  const name = document.getElementById('tb_name')?.value?.trim();
+  const display = document.getElementById('tb_ref_display');
+  const refInput = document.getElementById('tb_ref_price');
+  if (!name || !display) return;
+  const prices = getRefPrices();
+  if (prices[name]) {
+    display.textContent = '(参考: ' + prices[name].toLocaleString() + ')';
+    if (refInput) refInput.value = prices[name];
+  } else {
+    display.textContent = '';
+  }
+}
+function setRefPrice() {
+  const name = document.getElementById('tb_name')?.value?.trim();
+  const price = parseFloat(document.getElementById('tb_ref_price')?.value) || 0;
+  if (!name) { alert('请先填写品名'); return; }
+  if (price <= 0) { alert('请填写参考价'); return; }
+  saveRefPrice(name, price);
+  showRefPrice();
+  alert('已保存参考价');
+}
 
 function autoFillCost() {
   const name = document.getElementById('tb_name')?.value?.trim();
