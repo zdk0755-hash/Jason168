@@ -384,6 +384,9 @@ async function init() {
     applyRoleUI();
     updateCustomModuleNav();
     loadCustomModules();
+    loadDeletedModules();
+    loadTobaccoInv();
+    loadTobaccoCost();
   } catch(e) {
     showError(e.message);
     setStatus('连接失败');
@@ -726,6 +729,19 @@ function saveCustomModules(modules) {
   localStorage.setItem('custom_modules', JSON.stringify(modules));
   saveSetting('custom_modules', modules);
 }
+
+async function loadDeletedModules() {
+  try {
+    const data = await sbFetch('app_settings?Key=eq.deleted_modules&select=value');
+    if (data && data.length && data[0].value) {
+      const parsed = typeof data[0].value === 'string' ? JSON.parse(data[0].value) : data[0].value;
+      if (Array.isArray(parsed)) {
+        localStorage.setItem('deleted_modules', JSON.stringify(parsed));
+      }
+    }
+  } catch(e) {}
+}
+
 async function loadCustomModules() {
   try {
     const data = await sbFetch('app_settings?Key=eq.custom_modules&select=value');
@@ -961,6 +977,32 @@ function permanentDeleteModule(id) {
 
 
 // 烟酒槟榔库存
+
+
+async function loadTobaccoCost() {
+  try {
+    const data = await sbFetch('app_settings?Key=eq.tobacco_cost&select=value');
+    if (data && data.length && data[0].value) {
+      const parsed = typeof data[0].value === 'string' ? JSON.parse(data[0].value) : data[0].value;
+      if (parsed && typeof parsed === 'object') {
+        localStorage.setItem('tobacco_cost', JSON.stringify(parsed));
+      }
+    }
+  } catch(e) {}
+}
+
+async function loadTobaccoInv() {
+  try {
+    const data = await sbFetch('app_settings?Key=eq.tobacco_inv&select=value');
+    if (data && data.length && data[0].value) {
+      const parsed = typeof data[0].value === 'string' ? JSON.parse(data[0].value) : data[0].value;
+      if (parsed && typeof parsed === 'object') {
+        localStorage.setItem('tobacco_inv', JSON.stringify(parsed));
+      }
+    }
+  } catch(e) {}
+}
+
 function getTobaccoInv() {
   const saved = localStorage.getItem('tobacco_inv');
   return saved ? JSON.parse(saved) : {};
@@ -1105,6 +1147,7 @@ async function saveTobacco() {
     const cost = parseFloat(document.getElementById('tb_cost')?.value) || 0;
     if (cost > 0) costData[name] = cost;
     localStorage.setItem('tobacco_cost', JSON.stringify(costData));
+    saveSetting('tobacco_cost', costData);
   }
   saveTobaccoInv(inv);
   
@@ -2329,7 +2372,10 @@ function resetConfig() { if(confirm('清除？')){ localStorage.removeItem('sb_u
 
 if(currentUser) { applyRoleUI();
     updateCustomModuleNav();
-    loadCustomModules(); init(); }
+    loadCustomModules();
+    loadDeletedModules();
+    loadTobaccoInv();
+    loadTobaccoCost(); init(); }
 </script>
 </body>
 </html>
