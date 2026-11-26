@@ -1284,6 +1284,23 @@ function renderLogistics() {
     </div>
     <button class="btn btn-success" onclick="saveLogistics()">保存对账记录</button>
   </div>
+  
+  <div class="card" style="border-left:4px solid #27AE60">
+    <h2 style="color:#27AE60;font-size:16px">💰 收银台</h2>
+    <div class="form-row">
+      <div><label>日期</label><input type="date" id="lg_in_date" value="${today()}"></div>
+      <div><label>金额</label><input type="number" id="lg_in_amt" step="0.01" placeholder="收入金额"></div>
+      <div><label>币种</label><select id="lg_in_cur" style="padding:8px">
+        <option value="MGA">MGA</option>
+        <option value="CNY">CNY</option>
+        <option value="USD">USD</option>
+        <option value="EUR">EUR</option>
+      </select></div>
+    </div>
+    <div style="margin-top:8px"><label>备注</label><input type="text" id="lg_in_note" placeholder="如：客户付款"></div>
+    <button class="btn btn-success" style="margin-top:10px" onclick="saveLogisticsIncome()">保存收入</button>
+  </div>
+  
   <div class="card">
     <h2>最近对账记录</h2>
     ${renderRecentLogistics()}
@@ -1393,6 +1410,39 @@ function editLogistics(id) {
     await loadData();
     render();
   }).catch(e => alert('修改失败'));
+}
+
+
+async function saveLogisticsIncome() {
+  const date = document.getElementById('lg_in_date').value;
+  const amt = parseFloat(document.getElementById('lg_in_amt').value) || 0;
+  const cur = document.getElementById('lg_in_cur').value;
+  const note = document.getElementById('lg_in_note').value.trim();
+  
+  if (!date || amt <= 0) {
+    alert('请填写日期和金额');
+    return;
+  }
+  
+  const desc = `[物流收入] @${currentUser?.username||''} ${note}`;
+  
+  try {
+    await sbFetch('transactions', {
+      method: 'POST',
+      body: JSON.stringify({
+        date, segment: 'express', type: '收入',
+        category: '物流收入', currency: cur,
+        amount: amt, pay: '现金', desc
+      })
+    });
+    alert('已保存');
+    document.getElementById('lg_in_amt').value = '';
+    document.getElementById('lg_in_note').value = '';
+    await loadData();
+    render();
+  } catch(e) {
+    alert('保存失败：' + e.message);
+  }
 }
 
 async function saveLogistics() {
