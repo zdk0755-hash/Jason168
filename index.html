@@ -977,7 +977,17 @@ function renderTobacco() {
           <datalist id="tb_products">${products.map(p=>`<option value="${p}">`).join('')}</datalist>
         </div>
         <div><label>数量</label><input type="number" id="tb_qty" step="1" placeholder="数量" min="1"></div>
-        <div id="tb_price_wrap"><label>单价（元）</label><input type="number" id="tb_price" step="0.01" placeholder="销售单价"></div>
+        <div id="tb_price_wrap"><label>单价</label>
+          <div style="display:flex;gap:4px">
+            <input type="number" id="tb_price" step="0.01" placeholder="销售单价" style="flex:1">
+            <select id="tb_cur" style="width:80px">
+              <option value="MGA">MGA</option>
+              <option value="CNY">CNY</option>
+              <option value="USD">USD</option>
+              <option value="EUR">EUR</option>
+            </select>
+          </div>
+        </div>
         <div id="tb_cost_wrap"><label>成本（元）</label><input type="number" id="tb_cost" step="0.01" placeholder="进货成本"></div>
       </div>
     </div>
@@ -1089,7 +1099,7 @@ async function saveTobacco() {
         method: 'POST',
         body: JSON.stringify({
           date, segment: 'tobacco2', type: '收入',
-          category: '销售', currency: 'CNY',
+          category: '销售', currency: cur,
           amount: salesAmt, pay: '现金', desc
         })
       });
@@ -1818,31 +1828,36 @@ function renderDaily() {
   dates.forEach(d => {
     const items = byDate[d];
     let inc = 0, exp = 0;
+    const byCur = {};
     items.forEach(t => {
-      if ((t.desc||'').includes('[已撤单]')) return; // 撤单不计入
-      const r = toRMB(t.amount, t.currency);
-      if (t.type === '收入') inc += r; else exp += r;
+      if ((t.desc||'').includes('[已撤单]')) return;
+      const cur = t.currency || 'CNY';
+      if (!byCur[cur]) byCur[cur] = {inc:0, exp:0};
+      if (t.type === '收入') byCur[cur].inc += t.amount;
+      else byCur[cur].exp += t.amount;
     });
-    const profit = inc - exp;
+    const curSummary = Object.entries(byCur).map(([c,v]) => 
+      `${c}: 收${v.inc.toLocaleString()} 支${v.exp.toLocaleString()}`
+    ).join(' | ');
+    const cnyProfit = (byCur['CNY']?.inc || 0) - (byCur['CNY']?.exp || 0);
     html += `<div style="margin-bottom:16px">
       <div style="background:#1F4E79;color:white;padding:8px 12px;border-radius:6px 6px 0 0;display:flex;justify-content:space-between">
         <span>${d}</span>
-        <span>收入 ${formatMoney(inc)} | 支出 ${formatMoney(exp)} | 利润 <b>${formatMoney(profit)}</b></span>
+        <span style="font-size:12px">${curSummary}${cnyProfit!==0?' | CNY利润'+formatMoney(cnyProfit):''}</span>
       </div>
       <div style="overflow-x:auto"><table style="margin:0">
         <thead><tr><th>板块</th><th>操作人</th><th>类型</th><th>摘要</th><th>金额</th></tr></thead>
         <tbody>${items.map(t => {
           const seg = getSegment(t.segment);
-          const r = toRMB(t.amount, t.currency);
           const isCancelled = (t.desc||'').includes('[已撤单]');
-          const origAmt = t.currency === 'CNY' ? '' : ` <span style="color:#7F8C8D;font-size:11px">(${t.amount.toLocaleString()} ${t.currency})</span>`;
-          const cancelTag = isCancelled ? ' <span style="color:#C0392B;font-size:11px">[已撤单]</span>' : '';
+          const cancelTag = isCancelled ? ' <span style="color:#C0392B">[已撤单]</span>' : '';
+          const curLabel = t.currency && t.currency !== 'CNY' ? ' ' + t.currency : '';
           return `<tr style="${isCancelled?'opacity:0.5;text-decoration:line-through':''}">
             <td><span class="segment-tag" style="background:${seg.color}22;color:${seg.color}">${seg.short}</span></td>
             <td style="font-size:11px;color:#7F8C8D">${(t.desc||'').match(/@(\w+)/)?.[1] || '-'}</td>
             <td><span class="badge ${t.type==='收入'?'badge-income':'badge-expense'}">${t.type}</span></td>
             <td style="font-size:12px">${t.desc||'-'}</td>
-            <td class="${t.type==='收入'?'positive':'negative'}">${isCancelled?'-':formatMoney(r)}${origAmt}${cancelTag}</td>
+            <td class="${t.type==='收入'?'positive':'negative'}">${isCancelled?'-':t.amount.toLocaleString()}${curLabel}${cancelTag}</td>
           </tr>`;
         }).join('')}</tbody>
       </table></div>
@@ -1879,12 +1894,12 @@ function renderMonthly() {
     if (!t.date) return;
     const m = t.date.slice(0,7);
     if (!byMonth[m]) byMonth[m] = {};
-    if (!byMonth[m][t.date]) byMonth[m][t.date] = {inc:0, exp:0};
-    const r = toRMB(t.amount, t.currency);
-    if (isNaN(r)) return;
-    if ((t.desc||'').includes('[已撤单]')) return; // 撤单不计入
-    if (t.type === '收入') byMonth[m][t.date].inc += r;
-    else byMonth[m][t.date].exp += r;
+    if (!byMonth[m][t.date]) byMonth[m][t.date] = {};
+    if ((t.desc||'').includes('[已撤单]')) return;
+    const cur = t.currency || 'CNY';
+    if (!byMonth[m][t.date][cur]) byMonth[m][t.date][cur] = {inc:0, exp:0};
+    if (t.type === '收入') byMonth[m][t.date][cur].inc += t.amount;
+    else byMonth[m][t.date][cur].exp += t.amount;
   });
   const months = Object.keys(byMonth).sort().reverse();
   
@@ -1911,8 +1926,17 @@ function renderMonthly() {
     const days = byMonth[m];
     const dayKeys = Object.keys(days).sort().reverse();
     let mInc = 0, mExp = 0;
-    dayKeys.forEach(d => { mInc += days[d].inc; mExp += days[d].exp; });
-    const mProfit = mInc - mExp;
+    const monthByCur = {};
+    dayKeys.forEach(d => {
+      Object.entries(days[d]).forEach(([cur, v]) => {
+        if (!monthByCur[cur]) monthByCur[cur] = {inc:0, exp:0};
+        monthByCur[cur].inc += v.inc;
+        monthByCur[cur].exp += v.exp;
+      });
+    });
+    const monthSummary = Object.entries(monthByCur).map(([c,v]) => 
+      `${c}:收${v.inc.toLocaleString()}/支${v.exp.toLocaleString()}`
+    ).join(' ');
     // 统计物流重量和件数
     let totalWeight = 0, totalQty = 0;
     const monthTxs = txs.filter(t => t.date && t.date.startsWith(m) && t.desc && t.desc.includes('[物流]'));
@@ -1928,27 +1952,19 @@ function renderMonthly() {
     html += `<div style="margin-bottom:16px">
       <div style="background:#1F4E79;color:white;padding:8px 12px;border-radius:6px 6px 0 0;display:flex;justify-content:space-between;flex-wrap:wrap">
         <span>${m}</span>
-        <span>收入 ${formatMoney(mInc)} | 支出 ${formatMoney(mExp)} | 利润 <b>${formatMoney(mProfit)}</b>${logisticsInfo}</span>
+        <span style="font-size:12px">${monthSummary}${logisticsInfo}</span>
       </div>
       <div style="overflow-x:auto"><table style="margin:0">
-        <thead><tr><th>日期</th><th>收入</th><th>支出</th><th>利润</th><th>外币明细</th></tr></thead>
+        <thead><tr><th>日期</th><th colspan="4">各币种收支（收入/支出）</th></tr></thead>
         <tbody>${dayKeys.map(d => {
-          const x = days[d];
-          const p = x.inc - x.exp;
-          // 获取当天的外币明细
-          const dayTxs = txs.filter(t => t.date === d && t.currency !== 'CNY');
-          const curInfo = {};
-          dayTxs.forEach(t => {
-            if (!curInfo[t.currency]) curInfo[t.currency] = 0;
-            curInfo[t.currency] += t.type === '收入' ? t.amount : -t.amount;
-          });
-          const curStr = Object.entries(curInfo).map(([c,v]) => `${c}:${v>0?'+':''}${v.toLocaleString()}`).join(' ');
+          const dayCurs = days[d];
+          const curStr = Object.entries(dayCurs).map(([c,v]) => {
+            const net = v.inc - v.exp;
+            return `<span style="margin-right:8px">${c}: <span class="positive">${v.inc.toLocaleString()}</span>/<span class="negative">${v.exp.toLocaleString()}</span></span>`;
+          }).join('');
           return `<tr>
             <td>${d}</td>
-            <td class="positive">${formatMoney(x.inc)}</td>
-            <td class="negative">${formatMoney(x.exp)}</td>
-            <td class="${p>=0?'positive':'negative'}">${formatMoney(p)}</td>
-            <td style="font-size:11px;color:#7F8C8D">${curStr}</td>
+            <td colspan="4" style="font-size:12px">${curStr}</td>
           </tr>`;
         }).join('')}</tbody>
       </table></div>
@@ -2066,70 +2082,6 @@ function renderSettings() {
 
 
 
-
-function setInventory() {
-  const seg = document.getElementById('inv_seg2').value;
-  const cur = document.getElementById('inv_cur2').value;
-  const val = parseFloat(document.getElementById('inv_set2').value);
-  if (!seg || !cur || isNaN(val)) { alert('请填写完整'); return; }
-  const segInv = getSegInv(seg);
-  segInv[cur] = val;
-  saveInventory();
-  alert(seg + ' 的 ' + cur + ' 已设为 ' + val);
-  render();
-}
-
-function adjustInventory2() {
-  const cur = document.getElementById('inv_cur2').value;
-  const amt = parseFloat(document.getElementById('inv_amt2').value);
-  const seg = document.getElementById('inv_seg2')?.value;
-  if (!cur || isNaN(amt) || !seg) { alert('请填写完整'); return; }
-  const segInv = getSegInv(seg);
-  segInv[cur] = (segInv[cur] || 0) + amt;
-  saveInventory();
-  alert(seg + ' 的 ' + cur + ' 已调整');
-  render();
-}
-
-function adjustInventory() {
-  const cur = document.getElementById('inv_cur').value;
-  const amt = parseFloat(document.getElementById('inv_amt').value);
-  if (!cur || isNaN(amt)) { alert('请填写'); return; }
-  if (!state.inventory[cur]) state.inventory[cur] = 0;
-  state.inventory[cur] += amt;
-  saveInventory();
-  alert(cur + ' 库存已调整为 ' + state.inventory[cur]);
-  render();
-}
-
-
-function addCurrency() {
-  const code = document.getElementById('newCurCode').value.trim().toUpperCase();
-  const name = document.getElementById('newCurName').value.trim();
-  const rate = parseFloat(document.getElementById('newCurRate').value);
-  const inv = document.getElementById('newCurInv').checked;
-  if (!code || !name || isNaN(rate)) { alert('请填写完整'); return; }
-  if (state.currencies.find(c => c.code === code)) { alert('已存在'); return; }
-  state.currencies.push({ code, name, rate, inverted: inv });
-  localStorage.setItem('custom_rates', JSON.stringify(state.currencies));
-  render();
-}
-function deleteCurrency(code) {
-  if (code === 'CNY') { alert('人民币不能删除'); return; }
-  if (!confirm('删除 ' + code + '？')) return;
-  state.currencies = state.currencies.filter(c => c.code !== code);
-  localStorage.setItem('custom_rates', JSON.stringify(state.currencies));
-  render();
-}
-
-function updateRate(code, val) {
-  const c = state.currencies.find(x => x.code === code);
-  if (c) {
-    c.rate = parseFloat(val) || 1;
-    localStorage.setItem('custom_rates', JSON.stringify(state.currencies));
-    saveSettingsToCloud();
-  }
-}
 
 
 function toggleFxSeg(id, checked) {
