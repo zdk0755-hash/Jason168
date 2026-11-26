@@ -591,7 +591,15 @@ function getUserSegments() {
 function getVisibleTransactions() {
   if (!currentUser || currentUser.role === "admin") return state.transactions;
   const segs = getUserSegments();
-  return state.transactions.filter(t => segs.includes(t.segment));
+  return state.transactions.filter(t => {
+    if (segs.includes(t.segment)) return true;
+    // 自定义板块
+    if (t.segment && t.segment.startsWith('custom_')) {
+      const modId = t.segment.replace('custom_', '');
+      return segs.includes('cm_' + modId);
+    }
+    return false;
+  });
 }
 function canEditSegment(seg) {
   if (!currentUser || currentUser.role === "admin") return true;
@@ -640,10 +648,17 @@ async function manualRefresh() {
 function updateCustomModuleNav() {
   const modules = getCustomModules();
   const nav = document.getElementById('customModuleNav');
+  const segs = getUserSegments();
+  const isAdmin = currentUser && currentUser.role === 'admin';
   if (nav) {
-    nav.innerHTML = modules.map(m => 
+    nav.innerHTML = modules.filter(m => isAdmin || segs.includes('cm_' + m.id)).map(m => 
       `<button data-page="cm_${m.id}" onclick="showPage('cm_${m.id}')">${m.name}</button>`
     ).join('');
+  }
+  // 烟酒槟榔按钮权限
+  const tbBtn = document.querySelector('[data-page="tobacco"]');
+  if (tbBtn && !isAdmin && !segs.includes('tobacco2')) {
+    tbBtn.style.display = 'none';
   }
 }
 
@@ -2222,7 +2237,13 @@ function toggleInvPerm(id) {
 
 function editUserSegments(id) {
   const current = USERS[id].segments || (USERS[id].segment ? [USERS[id].segment] : []);
-  const checks = state.segments.map(s => 
+  const modules = getCustomModules();
+  const allSegs = [
+    ...state.segments,
+    { id: 'tobacco2', short: '烟酒槟榔' },
+    ...modules.map(m => ({ id: 'cm_' + m.id, short: m.name }))
+  ];
+  const checks = allSegs.map(s => 
     `<label style="display:block;margin:6px 0;font-size:14px">
       <input type="checkbox" value="${s.id}" ${current.includes(s.id)?'checked':''}> ${s.short}
     </label>`
