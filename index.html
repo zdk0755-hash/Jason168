@@ -1498,7 +1498,7 @@ function renderExchange() {
       <div style="font-size:13px;font-weight:600;color:#148F77;margin-bottom:8px">收入（客户付出）</div>
       <div class="form-row">
         <div><label>币种</label><select id="ex_in_cur" onchange="calcFromIncome();calcOutCost()">${state.currencies.map(c=>`<option value="${c.code}">${c.code} ${c.name}</option>`).join('')}</select></div>
-        <div><label>金额</label><input type="number" id="ex_in_amt" step="0.01" placeholder="客户付出的金额" oninput="calcFromIncome()"></div>
+        <div><label>金额</label><input type="number" id="ex_in_amt" step="0.01" placeholder="客户付出的金额" oninput="calcFromIncome();calcOutCost('inAmt')"></div>
         <div><label>进货汇率</label><input type="number" id="ex_in_rate" step="0.01" placeholder="如690" oninput="calcFromIncome()"></div>
       </div>
     </div>
@@ -1506,9 +1506,9 @@ function renderExchange() {
       <div style="font-size:13px;font-weight:600;color:#E67E22;margin-bottom:8px">支出（你付出）</div>
       <div class="form-row">
         <div><label>币种</label><select id="ex_out_cur" onchange="calcFromIncome();calcOutCost()">${state.currencies.map(c=>`<option value="${c.code}" ${c.code==='MGA'?'selected':''}>${c.code} ${c.name}</option>`).join('')}</select></div>
-        <div><label>金额</label><input type="number" id="ex_out_amt" step="0.01" placeholder="你付出的金额" oninput="calcOutCost()"></div>
-        <div><label>当日汇率</label><input type="number" id="ex_rate" step="0.01" oninput="calcOutCost()" onchange="saveRateFromExchange()" title="修改后自动保存"></div>
-        <div><label>出货成本（自动）</label><input type="number" id="ex_out_cost" step="0.01" placeholder="自动计算" readonly style="background:#f5f5f5"></div>
+        <div><label>金额</label><input type="number" id="ex_out_amt" step="0.01" placeholder="可手动修改" oninput="calcOutCost('outAmt')"></div>
+        <div><label>当日汇率</label><input type="number" id="ex_rate" step="0.01" oninput="calcOutCost('rate')" onchange="saveRateFromExchange()" title="修改后自动保存"></div>
+        <div><label>出货成本（自动）</label><input type="number" id="ex_out_cost" oninput="calcOutCost('cost')" step="0.01" placeholder="自动计算" readonly style="background:#f5f5f5"></div>
       </div>
     </div>
     <div class="form-row">
@@ -1620,7 +1620,7 @@ function saveRateFromExchange() {
   calcOutCost();
 }
 
-function calcOutCost() {
+function calcOutCost(source) {
   const inCur = document.getElementById('ex_in_cur')?.value;
   const inAmt = parseFloat(document.getElementById('ex_in_amt')?.value) || 0;
   const outCur = document.getElementById('ex_out_cur')?.value;
@@ -1628,7 +1628,8 @@ function calcOutCost() {
   const outAmtEl = document.getElementById('ex_out_amt');
   const costEl = document.getElementById('ex_out_cost');
   
-  if (!rateEl || !costEl) return;
+  if (!rateEl || !costEl || !outAmtEl) return;
+  if (inCur !== 'CNY' || outCur === 'CNY') return;
   
   // 如果汇率框为空，从设置读取
   if (!rateEl.value) {
@@ -1638,18 +1639,31 @@ function calcOutCost() {
   }
   
   const rate = parseFloat(rateEl.value) || 0;
+  const outAmt = parseFloat(outAmtEl.value) || 0;
+  const cost = parseFloat(costEl.value) || 0;
   
-  // 收入CNY，支出外币：算出支出金额和成本
-  if (inCur === 'CNY' && inAmt > 0 && rate > 0 && outCur !== 'CNY') {
+  if (rate <= 0) return;
+  
+  // 根据触发源反推
+  if (source === 'cost' && cost > 0) {
+    // 改了成本 → 反推支出金额
+    outAmtEl.value = (cost * rate).toFixed(0);
+  } else if (source === 'outAmt' && outAmt > 0) {
+    // 改了支出金额 → 算成本
+    costEl.value = (outAmt / rate).toFixed(2);
+  } else if (source === 'rate' || source === 'inAmt') {
+    // 改了汇率或收入 → 重算支出和成本
+    if (inAmt > 0) {
+      outAmtEl.value = (inAmt * rate).toFixed(0);
+      costEl.value = inAmt.toFixed(2);
+    }
+  } else if (outAmt > 0) {
+    // 默认：有支出金额就算成本
+    costEl.value = (outAmt / rate).toFixed(2);
+  } else if (inAmt > 0) {
+    // 没有支出金额，用收入算
     outAmtEl.value = (inAmt * rate).toFixed(0);
     costEl.value = inAmt.toFixed(2);
-  }
-  // 其他情况：根据支出金额算成本
-  else {
-    const outAmt = parseFloat(outAmtEl?.value) || 0;
-    if (outAmt > 0 && rate > 0 && inCur === 'CNY') {
-      costEl.value = (outAmt / rate).toFixed(2);
-    }
   }
 }
 
