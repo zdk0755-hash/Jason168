@@ -1106,7 +1106,7 @@ function toggleTobaccoFields() {
 
 function renderTobaccoRecords() {
   const list = state.transactions
-    .filter(t => t.desc && t.desc.includes('[烟酒]'))
+    .filter(t => t.desc && t.desc.includes('[烟酒]') && !t.desc.includes('[已撤单]'))
     .sort((a,b) => b.date.localeCompare(a.date))
     .slice(0, 20);
   if (!list.length) return '<div class="empty">暂无记录</div>';
@@ -1357,7 +1357,7 @@ function calcLogistics() {
 
 function renderRecentLogistics() {
   const list = state.transactions
-    .filter(t => t.desc && t.desc.includes('[物流]'))
+    .filter(t => t.desc && t.desc.includes('[物流]') && !t.desc.includes('[已撤单]'))
     .sort((a,b) => b.date.localeCompare(a.date))
     .slice(0, 15);
   if (!list.length) return '<div class="empty">暂无记录</div>';
@@ -1525,7 +1525,7 @@ function renderExchange() {
 
 function renderRecentExchange() {
   const list = getVisibleTransactions()
-    .filter(t => t.desc && t.desc.includes('[换汇]'))
+    .filter(t => t.desc && t.desc.includes('[换汇]') && !t.desc.includes('[已撤单]'))
     .sort((a,b) => b.date.localeCompare(a.date))
     .slice(0, 10);
   if (!list.length) return '<div class="empty">暂无换汇记录</div>';
