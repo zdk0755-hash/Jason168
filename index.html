@@ -1076,7 +1076,6 @@ async function saveTobacco() {
   }
   saveTobaccoInv(inv);
   
-  const costData = JSON.parse(localStorage.getItem('tobacco_cost') || '{}');
   const unitCost = type === '销售' ? (costData[name] || 0) : (parseFloat(document.getElementById('tb_cost')?.value) || 0);
   const salesAmt = type === '销售' ? qty * price : 0;
   const costAmt = type === '销售' ? qty * unitCost : (type === '入库' ? qty * unitCost : 0);
