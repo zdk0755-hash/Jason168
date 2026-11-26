@@ -1822,6 +1822,15 @@ function calcOutCost(source) {
   if (rate <= 0) return;
   
   // 根据触发源反推
+  // 如果用户正在清空支出金额，不自动恢复
+  if (source === 'outAmt' && outAmtEl.value === '') {
+    costEl.value = '';
+    return;
+  }
+  if (source === 'cost' && costEl.value === '') {
+    return;
+  }
+  
   if (source === 'cost' && cost > 0) {
     // 改了成本 → 反推支出金额
     outAmtEl.value = (cost * rate).toFixed(0);
