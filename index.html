@@ -1792,16 +1792,26 @@ function renderDashboard() {
     <tbody>${segHtml}</tbody></table></div></div>`;
 }
 
+
+function hasDedicatedPage(segId) {
+  // 有单独页面的板块
+  const dedicated = ['express', 'tobacco2'];
+  // 自定义板块都有单独页面
+  if (segId && segId.startsWith('custom_')) return true;
+  if (segId && segId.startsWith('cm_')) return true;
+  return dedicated.includes(segId);
+}
+
 function renderEntry() {
   const defaultCats = state.categories.income;
   return `<div class="card"><h2>录入收支</h2>
     <div class="form-row">
       <div><label>日期</label><input type="date" id="e_date" value="${today()}"></div>
-      <div><label>板块</label><select id="e_seg" onchange="toggleExpress()">${
+      <div><label>板块</label><select id="e_seg">${
     (currentUser && currentUser.role==="staff"
       ? state.segments.filter(s => getUserSegments().includes(s.id))
       : state.segments
-    ).map(s=>`<option value="${s.id}">${s.name}</option>`).join('')
+    ).filter(s => !hasDedicatedPage(s.id)).map(s=>`<option value="${s.id}">${s.name}</option>`).join('')
   }</select></div>
       <div><label>类型</label><select id="e_type" onchange="updateCat()"><option>收入</option><option>支出</option></select></div>
       <div><label>分类</label><select id="e_cat">${defaultCats.map(c=>`<option>${c}</option>`).join('')}</select></div>
@@ -1821,7 +1831,37 @@ function renderEntry() {
       </div>
     </div>
     <button class="btn btn-success" onclick="addTransaction()">保存</button>
+  </div>
+  <div class="card">
+    <h2>最近记录</h2>
+    ${renderEntryRecords()}
   </div>`;
+}
+
+function renderEntryRecords() {
+  const list = state.transactions
+    .filter(t => !t.desc || (!t.desc.includes('[换汇]') && !t.desc.includes('[物流]') && !t.desc.includes('[烟酒]') && !t.desc.includes('[已撤单]')))
+    .sort((a,b) => b.date.localeCompare(a.date))
+    .slice(0, 15);
+  if (!list.length) return '<div class="empty">暂无记录</div>';
+  const isAdmin = currentUser && currentUser.role === 'admin';
+  return `<div style="overflow-x:auto"><table>
+    <thead><tr><th>日期</th><th>板块</th><th>类型</th><th>摘要</th><th>金额</th>${isAdmin?'<th>操作</th>':''}</tr></thead>
+    <tbody>${list.map(t => {
+      const seg = getSegment(t.segment);
+      return `<tr>
+        <td>${t.date}</td>
+        <td><span class="segment-tag" style="background:${seg.color}22;color:${seg.color}">${seg.short}</span></td>
+        <td><span class="badge ${t.type==='收入'?'badge-income':'badge-expense'}">${t.type}</span></td>
+        <td style="font-size:12px">${t.desc||t.category||'-'}</td>
+        <td class="${t.type==='收入'?'positive':'negative'}">${formatAmt(t.amount, t.currency)}</td>
+        ${isAdmin?`<td>
+          <button class="btn btn-sm" onclick="editTx('${t.id}')">改</button>
+          <button class="btn btn-sm btn-danger" onclick="deleteTx('${t.id}')">撤</button>
+        </td>`:''}
+      </tr>`;
+    }).join('')}</tbody>
+  </table></div>`;
 }
 
 function toggleExpress() {
