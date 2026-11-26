@@ -196,9 +196,11 @@ if (saved) {
   <button data-page="entry" onclick="showPage('entry')">录入收支</button>
   <button data-page="exchange" onclick="showPage('exchange')">换汇录入</button>
   <button data-page="logistics" onclick="showPage('logistics')">物流对账</button>
+  <button data-page="tobacco" onclick="showPage('tobacco')">烟酒槟榔</button>
   <button data-page="ledger" onclick="showPage('ledger')">明细账本</button>
   <button data-page="daily" onclick="showPage('daily')">每日汇总</button>
   <button data-page="monthly" onclick="showPage('monthly')">每月汇总</button>
+  <span id="customModuleNav"></span>
   <button data-page="settings" onclick="showPage('settings')">设置</button>
 </div>
 <div class="container" id="app"></div>
@@ -380,6 +382,8 @@ async function init() {
     render();
     setStatus('已连接');
     applyRoleUI();
+    updateCustomModuleNav();
+    loadCustomModules();
   } catch(e) {
     showError(e.message);
     setStatus('连接失败');
@@ -408,7 +412,7 @@ async function loadData() {
     weight: r.weight ? Number(r.weight) : 0, pricePerKg: r.price_per_kg ? Number(r.price_per_kg) : 0
   }));
   // 如果用户正在录入页面，不自动刷新界面，避免清空输入
-  const formPages = ['entry', 'exchange', 'logistics'];
+  const formPages = ['entry', 'exchange', 'logistics', 'tobacco'];
   setStatus('已连接 · ' + state.transactions.length + '条');
   // 更新待审核数量
   const pendingCount = state.transactions.filter(t => t.desc && t.desc.includes('[待审]')).length;
@@ -632,6 +636,17 @@ async function manualRefresh() {
   setStatus('已刷新');
 }
 
+
+function updateCustomModuleNav() {
+  const modules = getCustomModules();
+  const nav = document.getElementById('customModuleNav');
+  if (nav) {
+    nav.innerHTML = modules.map(m => 
+      `<button data-page="cm_${m.id}" onclick="showPage('cm_${m.id}')">${m.name}</button>`
+    ).join('');
+  }
+}
+
 function showPage(page) {
   currentPage = page;
   document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active', b.dataset.page===page));
@@ -644,13 +659,421 @@ function render() {
   else if (currentPage==='entry') app.innerHTML = renderEntry();
   else if (currentPage==='exchange') app.innerHTML = renderExchange();
   else if (currentPage==='logistics') app.innerHTML = renderLogistics();
+  else if (currentPage==='tobacco') app.innerHTML = renderTobacco();
   else if (currentPage==='ledger') app.innerHTML = renderLedger();
   else if (currentPage==='daily') app.innerHTML = renderDaily();
   else if (currentPage==='monthly') app.innerHTML = renderMonthly();
-  else if (currentPage==='settings') app.innerHTML = renderSettings();
+  else if (currentPage==='settings') app.innerHTML = renderSettings() + renderModuleManager() + renderDeletedModules();
+  else if (currentPage && currentPage.startsWith('cm_')) app.innerHTML = renderCustomModulePage(currentPage.slice(3));
 }
 
 
+
+
+
+// 自定义板块
+
+function getDeletedModules() {
+  const saved = localStorage.getItem('deleted_modules');
+  return saved ? JSON.parse(saved) : [];
+}
+function saveDeletedModules(modules) {
+  localStorage.setItem('deleted_modules', JSON.stringify(modules));
+  saveSetting('deleted_modules', modules);
+}
+
+function getCustomModules() {
+  const saved = localStorage.getItem('custom_modules');
+  return saved ? JSON.parse(saved) : [];
+}
+function saveCustomModules(modules) {
+  localStorage.setItem('custom_modules', JSON.stringify(modules));
+  saveSetting('custom_modules', modules);
+}
+async function loadCustomModules() {
+  try {
+    const data = await sbFetch('app_settings?Key=eq.custom_modules&select=value');
+    if (data && data.length && data[0].value) {
+      const parsed = typeof data[0].value === 'string' ? JSON.parse(data[0].value) : data[0].value;
+      if (Array.isArray(parsed)) {
+        localStorage.setItem('custom_modules', JSON.stringify(parsed));
+      }
+    }
+  } catch(e) {}
+}
+
+function renderCustomModulePage(moduleId) {
+  const modules = getCustomModules();
+  const mod = modules.find(m => m.id === moduleId);
+  if (!mod) return '<div class="card"><div class="empty">板块不存在</div></div>';
+  
+  const isAdmin = currentUser && currentUser.role === 'admin';
+  const fields = mod.fields || [];
+  
+  let formHtml = fields.map(f => {
+    if (f.type === 'select') {
+      const opts = (f.options || '').split(',').map(o => `<option>${o.trim()}</option>`).join('');
+      return `<div><label>${f.name}</label><select id="cm_${f.id}">${opts}</select></div>`;
+    } else if (f.type === 'number') {
+      return `<div><label>${f.name}</label><input type="number" id="cm_${f.id}" step="0.01" placeholder="${f.placeholder||''}"></div>`;
+    } else {
+      return `<div><label>${f.name}</label><input type="text" id="cm_${f.id}" placeholder="${f.placeholder||''}"></div>`;
+    }
+  }).join('');
+  
+  return `<div class="card">
+    <h2>${mod.name}</h2>
+    <p style="font-size:12px;color:#7F8C8D;margin-bottom:12px">${mod.desc || ''}</p>
+    <div class="form-row">
+      <div><label>日期</label><input type="date" id="cm_date" value="${today()}"></div>
+      <div><label>类型</label><select id="cm_type">
+        <option value="收入">收入</option>
+        <option value="支出">支出</option>
+        <option value="记录">仅记录</option>
+      </select></div>
+    </div>
+    <div class="form-row">${formHtml}</div>
+    <div><label>金额</label><input type="number" id="cm_amount" step="0.01" placeholder="可选"></div>
+    <div style="margin-top:8px"><label>备注</label><input type="text" id="cm_note" placeholder="可选"></div>
+    <button class="btn btn-success" style="margin-top:10px" onclick="saveCustomModule('${moduleId}')">保存</button>
+  </div>
+  <div class="card">
+    <h2>记录</h2>
+    ${renderCustomModuleRecords(moduleId, isAdmin)}
+  </div>`;
+}
+
+function renderCustomModuleRecords(moduleId, isAdmin) {
+  const list = state.transactions
+    .filter(t => t.desc && t.desc.includes('[CM:' + moduleId + ']'))
+    .sort((a,b) => b.date.localeCompare(a.date))
+    .slice(0, 30);
+  if (!list.length) return '<div class="empty">暂无记录</div>';
+  return `<div style="overflow-x:auto"><table>
+    <thead><tr><th>日期</th><th>类型</th><th>摘要</th><th>金额</th>${isAdmin?'<th>操作</th>':''}</tr></thead>
+    <tbody>${list.map(t => `<tr>
+      <td>${t.date}</td>
+      <td><span class="badge ${t.type==='收入'?'badge-income':'badge-expense'}">${t.type}</span></td>
+      <td style="font-size:12px">${t.desc.replace('[CM:'+moduleId+'] ','')}</td>
+      <td class="${t.type==='收入'?'positive':'negative'}">${formatMoney(t.amount)}</td>
+      ${isAdmin?`<td>
+        <button class="btn btn-sm" onclick="editTx('${t.id}')">改</button>
+        <button class="btn btn-sm btn-danger" onclick="deleteTx('${t.id}')">撤</button>
+      </td>`:''}
+    </tr>`).join('')}</tbody>
+  </table></div>`;
+}
+
+async function saveCustomModule(moduleId) {
+  const modules = getCustomModules();
+  const mod = modules.find(m => m.id === moduleId);
+  if (!mod) return;
+  
+  const date = document.getElementById('cm_date').value;
+  const type = document.getElementById('cm_type').value;
+  const amount = parseFloat(document.getElementById('cm_amount').value) || 0;
+  const note = document.getElementById('cm_note').value.trim();
+  
+  const fieldValues = (mod.fields || []).map(f => {
+    const el = document.getElementById('cm_' + f.id);
+    return f.name + ':' + (el ? el.value : '');
+  }).join(' ');
+  
+  if (!date) { alert('请填写日期'); return; }
+  
+  const desc = `[CM:${moduleId}] @${currentUser?.username||''} ${fieldValues} ${note}`;
+  
+  try {
+    await sbFetch('transactions', {
+      method: 'POST',
+      body: JSON.stringify({
+        date, segment: 'custom_' + moduleId, 
+        type: type === '记录' ? '支出' : type,
+        category: mod.name, currency: 'CNY',
+        amount, pay: '-', desc
+      })
+    });
+    alert('已保存');
+    await loadData();
+    render();
+  } catch(e) {
+    alert('保存失败');
+  }
+}
+
+function renderModuleManager() {
+  const modules = getCustomModules();
+  const isAdmin = currentUser && currentUser.role === 'admin';
+  if (!isAdmin) return '';
+  
+  return `<div class="card">
+    <h2>自定义板块管理</h2>
+    <p style="font-size:12px;color:#7F8C8D;margin-bottom:10px">创建新板块，自动出现在导航栏</p>
+    ${modules.map(m => `<div style="display:flex;justify-content:space-between;align-items:center;padding:8px;background:#f8f9fa;border-radius:4px;margin-bottom:6px">
+      <span><b>${m.name}</b> <span style="font-size:11px;color:#7F8C8D">${(m.fields||[]).length}个字段</span></span>
+      <span>
+        <button class="btn btn-sm" onclick="editCustomModule('${m.id}')">编辑</button>
+        <button class="btn btn-sm btn-danger" onclick="deleteCustomModule('${m.id}')">删除</button>
+      </span>
+    </div>`).join('') || '<div class="empty">暂无自定义板块</div>'}
+    <button class="btn" style="margin-top:10px" onclick="addCustomModule()">+ 新建板块</button>
+  </div>`;
+}
+
+function addCustomModule() {
+  const name = prompt('板块名称：');
+  if (!name) return;
+  const id = 'm' + Date.now();
+  const modules = getCustomModules();
+  modules.push({ id, name, desc: '', fields: [
+    { id: 'f1', name: '项目', type: 'text', placeholder: '' }
+  ]});
+  saveCustomModules(modules);
+  alert('已创建，请编辑添加字段');
+  render();
+}
+
+function editCustomModule(id) {
+  const modules = getCustomModules();
+  const mod = modules.find(m => m.id === id);
+  if (!mod) return;
+  
+  const action = prompt('操作：\n1. 修改名称\n2. 添加字段\n3. 删除字段\n请输入数字：');
+  if (action === '1') {
+    const newName = prompt('新名称：', mod.name);
+    if (newName) { mod.name = newName; saveCustomModules(modules); render(); }
+  } else if (action === '2') {
+    const fName = prompt('字段名称：');
+    if (!fName) return;
+    const fType = prompt('字段类型（text/number/select）：', 'text');
+    const fOpts = fType === 'select' ? prompt('选项（逗号分隔）：') : '';
+    mod.fields = mod.fields || [];
+    mod.fields.push({ id: 'f' + Date.now(), name: fName, type: fType || 'text', options: fOpts, placeholder: '' });
+    saveCustomModules(modules);
+    alert('已添加字段');
+    render();
+  } else if (action === '3') {
+    if (!mod.fields || !mod.fields.length) { alert('没有字段'); return; }
+    const fList = mod.fields.map((f,i) => (i+1) + '. ' + f.name).join('\n');
+    const idx = parseInt(prompt('删除哪个字段？\n' + fList)) - 1;
+    if (idx >= 0 && idx < mod.fields.length) {
+      mod.fields.splice(idx, 1);
+      saveCustomModules(modules);
+      render();
+    }
+  }
+}
+
+function deleteCustomModule(id) {
+  if (!confirm('确定删除此板块？可在设置中恢复')) return;
+  let modules = getCustomModules();
+  const mod = modules.find(m => m.id === id);
+  if (mod) {
+    mod.deletedAt = Date.now();
+    const deleted = getDeletedModules();
+    deleted.push(mod);
+    saveDeletedModules(deleted);
+  }
+  modules = modules.filter(m => m.id !== id);
+  saveCustomModules(modules);
+  alert('已删除，可在设置中恢复');
+  render();
+}
+
+function restoreCustomModule(id) {
+  let deleted = getDeletedModules();
+  const mod = deleted.find(m => m.id === id);
+  if (!mod) return;
+  delete mod.deletedAt;
+  const modules = getCustomModules();
+  modules.push(mod);
+  saveCustomModules(modules);
+  deleted = deleted.filter(m => m.id !== id);
+  saveDeletedModules(deleted);
+  alert('已恢复');
+  updateCustomModuleNav();
+  render();
+}
+
+function renderDeletedModules() {
+  const deleted = getDeletedModules();
+  if (!deleted.length) return '';
+  return `<div class="card" style="border:1px dashed #BDC3C7">
+    <h2 style="color:#7F8C8D">已删除板块</h2>
+    <p style="font-size:11px;color:#95A5A6;margin-bottom:8px">数据保留，可随时恢复或永久删除</p>
+    ${deleted.map(m => {
+      const date = new Date(m.deletedAt).toLocaleDateString();
+      return `<div style="display:flex;justify-content:space-between;align-items:center;padding:8px;background:#f8f9fa;border-radius:4px;margin-bottom:6px">
+        <span style="color:#7F8C8D">${m.name} <span style="font-size:11px">(${date}删除)</span></span>
+        <span>
+          <button class="btn btn-sm" onclick="restoreCustomModule('${m.id}')">恢复</button>
+          <button class="btn btn-sm btn-danger" onclick="permanentDeleteModule('${m.id}')">永久删除</button>
+        </span>
+      </div>`;
+    }).join('')}
+  </div>`;
+}
+
+function permanentDeleteModule(id) {
+  if (!confirm('永久删除后无法恢复，确定？')) return;
+  let deleted = getDeletedModules();
+  deleted = deleted.filter(m => m.id !== id);
+  saveDeletedModules(deleted);
+  alert('已永久删除');
+  render();
+}
+
+
+// 烟酒槟榔库存
+function getTobaccoInv() {
+  const saved = localStorage.getItem('tobacco_inv');
+  return saved ? JSON.parse(saved) : {};
+}
+function saveTobaccoInv(inv) {
+  localStorage.setItem('tobacco_inv', JSON.stringify(inv));
+  // 同步到云端
+  saveSetting('tobacco_inv', inv);
+}
+
+function renderTobacco() {
+  const inv = getTobaccoInv();
+  const products = Object.keys(inv);
+  const isAdmin = currentUser && currentUser.role === 'admin';
+  
+  return `<div class="card">
+    <h2>烟酒槟榔</h2>
+    <div style="background:#F5EEF8;padding:12px;border-radius:8px;margin-bottom:12px">
+      <div style="font-size:13px;font-weight:600;color:#8E44AD;margin-bottom:8px">当前库存</div>
+      ${products.length ? products.map(p => `<span style="display:inline-block;background:#E8DAEF;padding:4px 10px;border-radius:4px;margin:2px;font-size:13px">${p}: <b>${inv[p]}</b></span>`).join('') : '<span style="color:#7F8C8D">暂无库存</span>'}
+    </div>
+    
+    <div class="form-row">
+      <div><label>日期</label><input type="date" id="tb_date" value="${today()}"></div>
+      <div><label>类型</label><select id="tb_type" onchange="toggleTobaccoFields()">
+        <option value="入库">入库（增加库存）</option>
+        <option value="销售">销售（减少库存）</option>
+      </select></div>
+    </div>
+    
+    <div style="background:#E8F6F3;padding:12px;border-radius:8px;margin:12px 0">
+      <div class="form-row">
+        <div><label>品名</label>
+          <input type="text" id="tb_name" list="tb_products" placeholder="输入或选择品名">
+          <datalist id="tb_products">${products.map(p=>`<option value="${p}">`).join('')}</datalist>
+        </div>
+        <div><label>数量</label><input type="number" id="tb_qty" step="1" placeholder="数量" min="1"></div>
+        <div id="tb_price_wrap"><label>单价（元）</label><input type="number" id="tb_price" step="0.01" placeholder="销售单价"></div>
+      </div>
+    </div>
+    
+    <div><label>备注</label><input type="text" id="tb_note" placeholder="可选"></div>
+    <button class="btn btn-success" style="margin-top:10px" onclick="saveTobacco()">保存</button>
+  </div>
+  
+  ${isAdmin ? `<div class="card">
+    <h2>库存调整（仅主账户）</h2>
+    <div class="form-row">
+      <div><label>品名</label><select id="tb_adj_name">${products.map(p=>`<option value="${p}">${p}</option>`).join('') || '<option>无</option>'}</select></div>
+      <div><label>调整为</label><input type="number" id="tb_adj_qty" placeholder="目标数量"></div>
+      <div><button class="btn" onclick="adjustTobaccoInv()">调整</button></div>
+    </div>
+  </div>` : ''}
+  
+  <div class="card">
+    <h2>最近记录</h2>
+    ${renderTobaccoRecords()}
+  </div>`;
+}
+
+function toggleTobaccoFields() {
+  const type = document.getElementById('tb_type').value;
+  document.getElementById('tb_price_wrap').style.display = type === '销售' ? 'block' : 'none';
+}
+
+function renderTobaccoRecords() {
+  const list = state.transactions
+    .filter(t => t.desc && t.desc.includes('[烟酒]'))
+    .sort((a,b) => b.date.localeCompare(a.date))
+    .slice(0, 20);
+  if (!list.length) return '<div class="empty">暂无记录</div>';
+  const isAdmin = currentUser && currentUser.role === 'admin';
+  return `<div style="overflow-x:auto"><table>
+    <thead><tr><th>日期</th><th>摘要</th><th>金额</th>${isAdmin?'<th>操作</th>':''}</tr></thead>
+    <tbody>${list.map(t => `<tr>
+      <td>${t.date}</td>
+      <td style="font-size:12px">${t.desc}</td>
+      <td class="${t.type==='收入'?'positive':'negative'}">${formatMoney(t.amount)}</td>
+      ${isAdmin?`<td>
+        <button class="btn btn-sm" onclick="editTx('${t.id}')">改</button>
+        <button class="btn btn-sm btn-danger" onclick="deleteTx('${t.id}')">撤</button>
+      </td>`:''}
+    </tr>`).join('')}</tbody>
+  </table></div>`;
+}
+
+async function saveTobacco() {
+  const date = document.getElementById('tb_date').value;
+  const type = document.getElementById('tb_type').value;
+  const name = document.getElementById('tb_name').value.trim();
+  const qty = parseInt(document.getElementById('tb_qty').value) || 0;
+  const price = parseFloat(document.getElementById('tb_price').value) || 0;
+  const note = document.getElementById('tb_note').value.trim();
+  
+  if (!date || !name || qty <= 0) {
+    alert('请填写日期、品名和数量');
+    return;
+  }
+  if (type === '销售' && price <= 0) {
+    alert('销售请填写单价');
+    return;
+  }
+  
+  const inv = getTobaccoInv();
+  if (type === '销售') {
+    if ((inv[name] || 0) < qty) {
+      alert('库存不足，当前库存：' + (inv[name] || 0));
+      return;
+    }
+    inv[name] = (inv[name] || 0) - qty;
+  } else {
+    inv[name] = (inv[name] || 0) + qty;
+  }
+  saveTobaccoInv(inv);
+  
+  const amount = type === '销售' ? qty * price : 0;
+  const desc = `[烟酒] @${currentUser?.username||''} ${type} ${name} ${qty}${type==='销售'?'×¥'+price:''} ${note}`;
+  
+  try {
+    await sbFetch('transactions', {
+      method: 'POST',
+      body: JSON.stringify({
+        date, segment: 'tobacco2', type: type === '销售' ? '收入' : '支出',
+        category: type, currency: 'CNY',
+        amount, pay: '现金', desc
+      })
+    });
+    alert('已保存');
+    document.getElementById('tb_name').value = '';
+    document.getElementById('tb_qty').value = '';
+    document.getElementById('tb_price').value = '';
+    document.getElementById('tb_note').value = '';
+    await loadData();
+    render();
+  } catch(e) {
+    alert('保存失败：' + e.message);
+  }
+}
+
+function adjustTobaccoInv() {
+  const name = document.getElementById('tb_adj_name').value;
+  const qty = parseInt(document.getElementById('tb_adj_qty').value);
+  if (!name || isNaN(qty)) { alert('请选择品名并填写数量'); return; }
+  const inv = getTobaccoInv();
+  inv[name] = qty;
+  saveTobaccoInv(inv);
+  alert('已调整');
+  render();
+}
 
 function renderLogistics() {
   return `<div class="card">
@@ -1859,7 +2282,9 @@ function logout() {
 }
 function resetConfig() { if(confirm('清除？')){ localStorage.removeItem('sb_url'); localStorage.removeItem('sb_key'); location.reload(); } }
 
-if(currentUser) { applyRoleUI(); init(); }
+if(currentUser) { applyRoleUI();
+    updateCustomModuleNav();
+    loadCustomModules(); init(); }
 </script>
 </body>
 </html>
