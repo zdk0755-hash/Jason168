@@ -1165,7 +1165,7 @@ async function saveTobacco() {
         method: 'POST',
         body: JSON.stringify({
           date, segment: 'tobacco2', type: '收入',
-          category: '销售', currency: cur,
+          category: '销售', currency: document.getElementById('tb_cur')?.value || 'MGA',
           amount: salesAmt, pay: '现金', desc
         })
       });
