@@ -410,6 +410,17 @@ async function loadData() {
   // 如果用户正在录入页面，不自动刷新界面，避免清空输入
   const formPages = ['entry', 'exchange', 'logistics'];
   setStatus('已连接 · ' + state.transactions.length + '条');
+  // 更新待审核数量
+  const pendingCount = state.transactions.filter(t => t.desc && t.desc.includes('[待审]')).length;
+  const badge = document.getElementById('pendingBadge');
+  if (badge && currentUser && currentUser.role === 'admin') {
+    if (pendingCount > 0) {
+      badge.textContent = pendingCount;
+      badge.style.display = 'inline';
+    } else {
+      badge.style.display = 'none';
+    }
+  }
   if (currentPage && !formPages.includes(currentPage)) {
     render();
   }
@@ -497,9 +508,10 @@ function markError(id) {
   sbFetch('transactions?id=eq.' + id, {
     method: 'PATCH',
     body: JSON.stringify({ desc: newDesc })
-  }).then(() => {
+  }).then(async () => {
     alert('已标注，等待管理员审核');
-    loadData();
+    await loadData();
+    render();
   }).catch(e => alert('标注失败'));
 }
 
@@ -1243,7 +1255,12 @@ function renderLedger() {
   if (currentSegmentFilter!=='all') list = list.filter(t=>t.segment===currentSegmentFilter);
   const typeFilter = document.getElementById('ledgerTypeFilter')?.value || '';
   if (typeFilter) list = list.filter(t => t.type === typeFilter);
-  list.sort((a,b)=>b.date.localeCompare(a.date));
+  list.sort((a,b) => {
+    const aPending = (a.desc||'').includes('[待审]') ? 1 : 0;
+    const bPending = (b.desc||'').includes('[待审]') ? 1 : 0;
+    if (aPending !== bPending) return bPending - aPending;
+    return b.date.localeCompare(a.date);
+  });
   const opts = `<option value="all">全部</option>` + state.segments.map(s=>`<option value="${s.id}" ${currentSegmentFilter===s.id?'selected':''}>${s.short}</option>`).join('');
   if (!list.length) return `<div class="card"><div class="empty">暂无记录</div></div>`;
   return `<div class="card"><div style="margin-bottom:10px;display:flex;gap:8px;flex-wrap:wrap">
@@ -1259,9 +1276,11 @@ function renderLedger() {
       const seg = getSegment(t.segment);
       const rmb = toRMB(t.amount, t.currency);
       const isCancelled = (t.desc||'').includes('[已撤单]');
-      return `<tr style="${isCancelled?'opacity:0.5':''}"><td>${t.date}</td><td><span class="segment-tag" style="background:${seg.color}22;color:${seg.color}">${seg.short}</span></td>
+      const isPending = (t.desc||'').includes('[待审]');
+      const rowStyle = isCancelled ? 'opacity:0.5' : (isPending ? 'background:#FDEDEC;color:#C0392B;font-weight:600' : '');
+      return `<tr style="${rowStyle}"><td>${t.date}</td><td><span class="segment-tag" style="background:${seg.color}22;color:${seg.color}">${seg.short}</span></td>
         <td><span class="badge ${t.type==='收入'?'badge-income':'badge-expense'}">${t.type}</span></td>
-        <td>${t.desc||t.category}</td><td>${t.amount} ${t.currency}</td>
+        <td>${isPending?'<span style="color:#C0392B">[待审]</span> ':''}${t.desc||t.category}</td><td>${t.amount} ${t.currency}</td>
         <td class="${t.type==='收入'?'positive':'negative'}">${isCancelled?'<span style="color:#C0392B">已撤单</span>':formatMoney(rmb)}</td>
         <td>
           ${currentUser && currentUser.role==='admin' 
