@@ -329,6 +329,10 @@ function getTotalInv() {
 let currentPage = 'dashboard';
 let currentSegmentFilter = 'all';
 
+let dateFilterStart = '';
+let dateFilterEnd = '';
+
+
 
 function applyRoleUI() {
   if (currentUser && currentUser.role === "staff") {
@@ -1819,8 +1823,36 @@ function updateCat() {
   sel.innerHTML = cats.map(c=>`<option>${c}</option>`).join('');
 }
 
+
+
+function getDateFilterHtml() {
+  return `<div style="display:flex;gap:4px;align-items:center;flex-wrap:wrap">
+    <input type="date" id="dateStart" value="${dateFilterStart}" onchange="dateFilterStart=this.value;render()" style="padding:4px;border:1px solid #ddd;border-radius:4px">
+    <span>至</span>
+    <input type="date" id="dateEnd" value="${dateFilterEnd}" onchange="dateFilterEnd=this.value;render()" style="padding:4px;border:1px solid #ddd;border-radius:4px">
+    <button onclick="dateFilterStart='';dateFilterEnd='';render()" style="padding:4px 8px;border:1px solid #ddd;border-radius:4px;background:#f8f9fa;cursor:pointer">清除</button>
+  </div>`;
+}
+function filterByDate(list) {
+  return list.filter(t => {
+    if (dateFilterStart && t.date < dateFilterStart) return false;
+    if (dateFilterEnd && t.date > dateFilterEnd) return false;
+    return true;
+  });
+}
+
+function getAllSegmentOptions(selected) {
+  const modules = getCustomModules();
+  const allSegs = [
+    ...state.segments,
+    { id: 'tobacco2', short: '烟酒槟榔' },
+    ...modules.map(m => ({ id: 'custom_' + m.id, short: m.name }))
+  ];
+  return allSegs.map(s => `<option value="${s.id}" ${selected===s.id?'selected':''}>${s.short}</option>`).join('');
+}
+
 function renderLedger() {
-  let list = getVisibleTransactions();
+  let list = filterByDate(getVisibleTransactions());
   if (currentSegmentFilter!=='all') list = list.filter(t=>t.segment===currentSegmentFilter);
   const typeFilter = document.getElementById('ledgerTypeFilter')?.value || '';
   if (typeFilter) list = list.filter(t => t.type === typeFilter);
@@ -1830,9 +1862,10 @@ function renderLedger() {
     if (aPending !== bPending) return bPending - aPending;
     return b.date.localeCompare(a.date);
   });
-  const opts = `<option value="all">全部</option>` + state.segments.map(s=>`<option value="${s.id}" ${currentSegmentFilter===s.id?'selected':''}>${s.short}</option>`).join('');
+  const opts = `<option value="all">全部</option>` + getAllSegmentOptions(currentSegmentFilter);
   if (!list.length) return `<div class="card"><div class="empty">暂无记录</div></div>`;
-  return `<div class="card"><div style="margin-bottom:10px;display:flex;gap:8px;flex-wrap:wrap">
+  return `<div class="card"><div style="margin-bottom:10px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      ${getDateFilterHtml()}
       <select onchange="currentSegmentFilter=this.value;render()">${opts}</select>
       <select id="ledgerTypeFilter" onchange="render()">
         <option value="">全部类型</option>
@@ -1865,8 +1898,8 @@ function renderLedger() {
 function renderDaily() {
   const segFilter = document.getElementById('dailySegFilter')?.value || '';
   const typeFilter = document.getElementById('dailyTypeFilter')?.value || '';
-  const txs = getVisibleTransactions().filter(t => (!segFilter || t.segment === segFilter) && (!typeFilter || t.type === typeFilter));
-  const segOptions = state.segments.map(s => `<option value="${s.id}" ${segFilter===s.id?'selected':''}>${s.short}</option>`).join('');
+  const txs = filterByDate(getVisibleTransactions()).filter(t => (!segFilter || t.segment === segFilter) && (!typeFilter || t.type === typeFilter));
+  const segOptions = getAllSegmentOptions(segFilter);
   
   // 按日期分组，显示每条明细
   const byDate = {};
@@ -1879,6 +1912,7 @@ function renderDaily() {
   
   let html = `<div class="card"><h2>每日汇总</h2>
     <div style="margin-bottom:10px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      ${getDateFilterHtml()}
       <label>板块：</label>
       <select id="dailySegFilter" onchange="render()">
         <option value="">全部</option>
@@ -1956,8 +1990,8 @@ function renderDaily() {
 function renderMonthly() {
   const segFilter = document.getElementById('monthlySegFilter')?.value || '';
   const typeFilter = document.getElementById('monthlyTypeFilter')?.value || '';
-  const txs = getVisibleTransactions().filter(t => (!segFilter || t.segment === segFilter) && (!typeFilter || t.type === typeFilter));
-  const segOptions = state.segments.map(s => `<option value="${s.id}" ${segFilter===s.id?'selected':''}>${s.short}</option>`).join('');
+  const txs = filterByDate(getVisibleTransactions()).filter(t => (!segFilter || t.segment === segFilter) && (!typeFilter || t.type === typeFilter));
+  const segOptions = getAllSegmentOptions(segFilter);
   
   // 按月份分组，再按日期汇总
   const byMonth = {};
@@ -1976,6 +2010,7 @@ function renderMonthly() {
   
   let html = `<div class="card"><h2>每月汇总</h2>
     <div style="margin-bottom:10px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      ${getDateFilterHtml()}
       <label>板块：</label>
       <select id="monthlySegFilter" onchange="render()">
         <option value="">全部</option>
