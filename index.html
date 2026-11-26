@@ -1630,16 +1630,22 @@ function renderExchange() {
     : fxSegs;
   const segOptions = allowed.length ? allowed : fxSegs;
   
-  const totalInv = getTotalInv();
+  const totalInv = {};
+  state.segments.filter(s => (state.fxSegments || []).includes(s.id)).forEach(s => {
+    const inv = (state.inventory._segments || {})[s.id] || {};
+    Object.entries(inv).forEach(([k,v]) => { totalInv[k] = (totalInv[k] || 0) + v; });
+  });
   const totalHtml = Object.entries(totalInv).filter(([k,v])=>v!==0)
     .map(([k,v]) => `<span style="display:inline-block;margin:3px 6px;padding:3px 8px;background:#D5F5E3;border-radius:4px;font-size:12px">${k}: ${Number(v).toLocaleString()}</span>`).join('') || '<span style="color:#999">无</span>';
   
-  const segInvHtml = state.segments.map(s => {
-    const inv = (state.inventory._segments || {})[s.id] || {};
-    const items = Object.entries(inv).filter(([k,v])=>v!==0)
-      .map(([k,v]) => `${k}:${Number(v).toLocaleString()}`).join(' · ');
-    return items ? `<div style="font-size:12px;margin:4px 0"><b>${s.short}</b>：${items}</div>` : '';
-  }).join('');
+  const segInvHtml = state.segments
+    .filter(s => (state.fxSegments || []).includes(s.id))
+    .map(s => {
+      const inv = (state.inventory._segments || {})[s.id] || {};
+      const items = Object.entries(inv).filter(([k,v])=>v!==0)
+        .map(([k,v]) => `${k}:${Number(v).toLocaleString()}`).join(' · ');
+      return items ? `<div style="font-size:12px;margin:4px 0"><b>${s.short}</b>：${items}</div>` : '';
+    }).join('');
 
   const invHtml = `<div style="margin-bottom:8px"><b>总库存</b><br>${totalHtml}</div>
     <div><b>各板块</b><br>${segInvHtml || '<span style="color:#999">暂无</span>'}</div>`;
@@ -1694,6 +1700,18 @@ function renderExchange() {
     </div>
     <div id="ex_preview" style="margin-top:12px;padding:10px;background:#F4F6F7;border-radius:6px;font-size:13px;display:none"></div>
   </div>
+  <div class="card" style="border-left:4px solid #27AE60">
+    <h2 style="color:#27AE60;font-size:16px">💰 收银台（兑换店）</h2>
+    <p style="font-size:11px;color:#7F8C8D;margin-bottom:8px">收入记录到兑换店库存</p>
+    <div class="form-row">
+      <div><label>日期</label><input type="date" id="fx_in_date" value="${today()}"></div>
+      <div><label>金额</label><input type="number" id="fx_in_amt" step="0.01" placeholder="收入金额"></div>
+      <div><label>币种</label><select id="fx_in_cur">${state.currencies.map(c=>`<option value="${c.code}" ${c.code==='MGA'?'selected':''}>${c.code}</option>`).join('')}</select></div>
+    </div>
+    <div style="margin-top:8px"><label>备注</label><input type="text" id="fx_in_note" placeholder="如：客户付款"></div>
+    <button class="btn btn-success" style="margin-top:10px" onclick="saveFxIncome()">保存收入</button>
+  </div>
+  
   <div class="card">
     <h2>最近换汇记录</h2>
     ${renderRecentExchange()}
@@ -1850,6 +1868,44 @@ function calcOutCost(source) {
     // 没有支出金额，用收入算
     outAmtEl.value = (inAmt * rate).toFixed(0);
     costEl.value = inAmt.toFixed(2);
+  }
+}
+
+
+async function saveFxIncome() {
+  const date = document.getElementById('fx_in_date').value;
+  const amt = parseFloat(document.getElementById('fx_in_amt').value) || 0;
+  const cur = document.getElementById('fx_in_cur').value;
+  const note = document.getElementById('fx_in_note').value.trim();
+  
+  if (!date || amt <= 0) {
+    alert('请填写日期和金额');
+    return;
+  }
+  
+  // 更新兑换店库存
+  const segInv = getSegInv('exchange');
+  segInv[cur] = (segInv[cur] || 0) + amt;
+  saveInventory();
+  
+  const desc = `[收银台] @${currentUser?.username||''} 兑换店收入 ${amt} ${cur} ${note}`;
+  
+  try {
+    await sbFetch('transactions', {
+      method: 'POST',
+      body: JSON.stringify({
+        date, segment: 'exchange', type: '收入',
+        category: '收银台', currency: cur,
+        amount: amt, pay: '现金', desc
+      })
+    });
+    alert('已保存，库存已更新');
+    document.getElementById('fx_in_amt').value = '';
+    document.getElementById('fx_in_note').value = '';
+    await loadData();
+    render();
+  } catch(e) {
+    alert('保存失败：' + e.message);
   }
 }
 
