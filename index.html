@@ -252,13 +252,18 @@ async function loadSettingsFromCloud() {
         localStorage.setItem('fx_segments', JSON.stringify(state.fxSegments));
       }
     }
-    // 汇率
+    // 汇率 - 合并本地和云端
     const rateData = await sbFetch('app_settings?Key=eq.rates&select=value');
     if (rateData && rateData.length && rateData[0].value) {
       const parsed = typeof rateData[0].value === 'string' ? JSON.parse(rateData[0].value) : rateData[0].value;
       if (parsed && parsed.length) {
-        state.currencies = parsed;
+        // 合并：云端有的用云端，本地多的也保留
+        const cloudCodes = parsed.map(c => c.code);
+        const localOnly = state.currencies.filter(c => !cloudCodes.includes(c.code));
+        state.currencies = [...parsed, ...localOnly];
         localStorage.setItem('custom_rates', JSON.stringify(state.currencies));
+        // 如果本地有新增的，同步回云端
+        if (localOnly.length > 0) saveSettingsToCloud();
       }
     }
   } catch(e) { console.log('load settings', e); }
