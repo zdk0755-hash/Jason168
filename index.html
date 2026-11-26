@@ -963,6 +963,7 @@ function renderTobacco() {
         </div>
         <div><label>数量</label><input type="number" id="tb_qty" step="1" placeholder="数量" min="1"></div>
         <div id="tb_price_wrap"><label>单价（元）</label><input type="number" id="tb_price" step="0.01" placeholder="销售单价"></div>
+        <div id="tb_cost_wrap"><label>成本（元）</label><input type="number" id="tb_cost" step="0.01" placeholder="进货成本"></div>
       </div>
     </div>
     
@@ -987,7 +988,9 @@ function renderTobacco() {
 
 function toggleTobaccoFields() {
   const type = document.getElementById('tb_type').value;
-  document.getElementById('tb_price_wrap').style.display = type === '销售' ? 'block' : 'none';
+  const show = type === '销售';
+  document.getElementById('tb_price_wrap').style.display = show ? 'block' : 'none';
+  document.getElementById('tb_cost_wrap').style.display = show ? 'block' : 'none';
 }
 
 function renderTobaccoRecords() {
@@ -1040,22 +1043,51 @@ async function saveTobacco() {
   }
   saveTobaccoInv(inv);
   
-  const amount = type === '销售' ? qty * price : 0;
-  const desc = `[烟酒] @${currentUser?.username||''} ${type} ${name} ${qty}${type==='销售'?'×¥'+price:''} ${note}`;
+  const cost = parseFloat(document.getElementById('tb_cost')?.value) || 0;
+  const salesAmt = type === '销售' ? qty * price : 0;
+  const costAmt = type === '销售' ? qty * cost : 0;
+  const profit = salesAmt - costAmt;
+  const desc = `[烟酒] @${currentUser?.username||''} ${type} ${name} ${qty}${type==='销售'?'×¥'+price+' 成本¥'+cost+' 利润¥'+profit.toFixed(0):''} ${note}`;
   
   try {
-    await sbFetch('transactions', {
-      method: 'POST',
-      body: JSON.stringify({
-        date, segment: 'tobacco2', type: type === '销售' ? '收入' : '支出',
-        category: type, currency: 'CNY',
-        amount, pay: '现金', desc
-      })
-    });
+    // 销售收入
+    if (type === '销售' && salesAmt > 0) {
+      await sbFetch('transactions', {
+        method: 'POST',
+        body: JSON.stringify({
+          date, segment: 'tobacco2', type: '收入',
+          category: '销售', currency: 'CNY',
+          amount: salesAmt, pay: '现金', desc
+        })
+      });
+    }
+    // 销售成本（支出）
+    if (type === '销售' && costAmt > 0) {
+      await sbFetch('transactions', {
+        method: 'POST',
+        body: JSON.stringify({
+          date, segment: 'tobacco2', type: '支出',
+          category: '成本', currency: 'CNY',
+          amount: costAmt, pay: '现金', desc: desc + ' [成本]'
+        })
+      });
+    }
+    // 入库记录
+    if (type === '入库') {
+      await sbFetch('transactions', {
+        method: 'POST',
+        body: JSON.stringify({
+          date, segment: 'tobacco2', type: '支出',
+          category: '入库', currency: 'CNY',
+          amount: 0, pay: '-', desc
+        })
+      });
+    }
     alert('已保存');
     document.getElementById('tb_name').value = '';
     document.getElementById('tb_qty').value = '';
     document.getElementById('tb_price').value = '';
+    document.getElementById('tb_cost').value = '';
     document.getElementById('tb_note').value = '';
     await loadData();
     render();
