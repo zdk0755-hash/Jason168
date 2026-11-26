@@ -663,7 +663,12 @@ function renderLogistics() {
       <div id="lg_weight_fields">
         <div class="form-row">
           <div><label>总重量（kg）</label><input type="number" id="lg_total" step="0.01" placeholder="过磅总重" oninput="calcLogistics()"></div>
-          <div><label>同行带货（kg）</label><input type="number" id="lg_peer" step="0.01" placeholder="帮同行带的" value="0" oninput="calcLogistics()"></div>
+          <div><label>同行带货（kg）<span style="font-size:11px;color:#7F8C8D"> 可输入 1+2.5+0.85</span></label>
+            <div style="display:flex;gap:4px">
+              <input type="text" id="lg_peer" placeholder="如 1+2.5+0.85" value="0" style="flex:1" onkeydown="if(event.key==='Enter'){calcPeerSum();event.preventDefault()}">
+              <button type="button" onclick="calcPeerSum()" style="padding:6px 10px;background:#1F4E79;color:white;border:none;border-radius:4px;cursor:pointer">=</button>
+            </div>
+          </div>
           <div><label>实际重量</label><input type="number" id="lg_actual" step="0.01" readonly style="background:#f5f5f5"></div>
         </div>
       </div>
@@ -697,6 +702,26 @@ function toggleLogisticsMode() {
   document.getElementById('lg_price_label').textContent = mode === 'weight' ? '成本单价（元/公斤）' : '成本单价（元/台）';
   calcLogistics();
 }
+
+function calcPeerSum() {
+  const el = document.getElementById('lg_peer');
+  const expr = el.value.trim();
+  if (!expr) { el.value = '0'; calcLogistics(); return; }
+  try {
+    // 只允许数字、小数点、加减号
+    if (!/^[\d.+\-\s]+$/.test(expr)) {
+      alert('只能输入数字和加减号');
+      return;
+    }
+    const result = Function('"use strict";return(' + expr + ')')();
+    if (isNaN(result)) { alert('计算错误'); return; }
+    el.value = result.toFixed(2);
+    calcLogistics();
+  } catch(e) {
+    alert('格式错误，请用 1+2.5+0.85 这样的格式');
+  }
+}
+
 function calcLogistics() {
   const mode = document.getElementById('lg_mode')?.value || 'weight';
   const price = parseFloat(document.getElementById('lg_price').value) || 0;
