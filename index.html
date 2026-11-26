@@ -958,7 +958,7 @@ function renderTobacco() {
     <div style="background:#E8F6F3;padding:12px;border-radius:8px;margin:12px 0">
       <div class="form-row">
         <div><label>品名</label>
-          <input type="text" id="tb_name" list="tb_products" placeholder="输入或选择品名">
+          <input type="text" id="tb_name" list="tb_products" placeholder="输入或选择品名" onchange="autoFillCost()" oninput="autoFillCost()">
           <datalist id="tb_products">${products.map(p=>`<option value="${p}">`).join('')}</datalist>
         </div>
         <div><label>数量</label><input type="number" id="tb_qty" step="1" placeholder="数量" min="1"></div>
@@ -986,11 +986,24 @@ function renderTobacco() {
   </div>`;
 }
 
+
+function autoFillCost() {
+  const name = document.getElementById('tb_name')?.value?.trim();
+  const costEl = document.getElementById('tb_cost');
+  if (!name || !costEl) return;
+  const costData = JSON.parse(localStorage.getItem('tobacco_cost') || '{}');
+  if (costData[name]) {
+    costEl.value = costData[name];
+    costEl.style.background = '#E8F6F3';
+  } else {
+    costEl.style.background = '';
+  }
+}
+
 function toggleTobaccoFields() {
   const type = document.getElementById('tb_type').value;
-  const show = type === '销售';
-  document.getElementById('tb_price_wrap').style.display = show ? 'block' : 'none';
-  document.getElementById('tb_cost_wrap').style.display = show ? 'block' : 'none';
+  document.getElementById('tb_price_wrap').style.display = type === '销售' ? 'block' : 'none';
+  document.getElementById('tb_cost_wrap').style.display = type === '入库' ? 'block' : 'none';
 }
 
 function renderTobaccoRecords() {
@@ -1032,6 +1045,7 @@ async function saveTobacco() {
   }
   
   const inv = getTobaccoInv();
+  const costData = JSON.parse(localStorage.getItem('tobacco_cost') || '{}');
   if (type === '销售') {
     if ((inv[name] || 0) < qty) {
       alert('库存不足，当前库存：' + (inv[name] || 0));
@@ -1040,12 +1054,17 @@ async function saveTobacco() {
     inv[name] = (inv[name] || 0) - qty;
   } else {
     inv[name] = (inv[name] || 0) + qty;
+    // 入库时记录成本
+    const cost = parseFloat(document.getElementById('tb_cost')?.value) || 0;
+    if (cost > 0) costData[name] = cost;
+    localStorage.setItem('tobacco_cost', JSON.stringify(costData));
   }
   saveTobaccoInv(inv);
   
-  const cost = parseFloat(document.getElementById('tb_cost')?.value) || 0;
+  const costData = JSON.parse(localStorage.getItem('tobacco_cost') || '{}');
+  const unitCost = type === '销售' ? (costData[name] || 0) : (parseFloat(document.getElementById('tb_cost')?.value) || 0);
   const salesAmt = type === '销售' ? qty * price : 0;
-  const costAmt = type === '销售' ? qty * cost : 0;
+  const costAmt = type === '销售' ? qty * unitCost : (type === '入库' ? qty * unitCost : 0);
   const profit = salesAmt - costAmt;
   const desc = `[烟酒] @${currentUser?.username||''} ${type} ${name} ${qty}${type==='销售'?'×¥'+price+' 成本¥'+cost+' 利润¥'+profit.toFixed(0):''} ${note}`;
   
