@@ -662,7 +662,12 @@ function renderLogistics() {
       </div>
       <div id="lg_weight_fields">
         <div class="form-row">
-          <div><label>总重量（kg）</label><input type="number" id="lg_total" step="0.01" placeholder="过磅总重" oninput="calcLogistics()"></div>
+          <div><label>总重量（kg）<span style="font-size:11px;color:#7F8C8D"> 可输入 10+5.5+3</span></label>
+            <div style="display:flex;gap:4px">
+              <input type="text" id="lg_total" placeholder="如 10+5.5+3" style="flex:1" onkeydown="if(event.key==='Enter'){calcTotalSum();event.preventDefault()}">
+              <button type="button" onclick="calcTotalSum()" style="padding:6px 10px;background:#1F4E79;color:white;border:none;border-radius:4px;cursor:pointer">=</button>
+            </div>
+          </div>
           <div><label>同行带货（kg）<span style="font-size:11px;color:#7F8C8D"> 可输入 1+2.5+0.85</span></label>
             <div style="display:flex;gap:4px">
               <input type="text" id="lg_peer" placeholder="如 1+2.5+0.85" value="0" style="flex:1" onkeydown="if(event.key==='Enter'){calcPeerSum();event.preventDefault()}">
@@ -703,6 +708,25 @@ function toggleLogisticsMode() {
   calcLogistics();
 }
 
+
+function calcTotalSum() {
+  const el = document.getElementById('lg_total');
+  const expr = el.value.trim();
+  if (!expr) { el.value = ''; calcLogistics(); return; }
+  try {
+    if (!/^[\d.+\-\s]+$/.test(expr)) {
+      alert('只能输入数字和加减号');
+      return;
+    }
+    const result = Function('"use strict";return(' + expr + ')')();
+    if (isNaN(result)) { alert('计算错误'); return; }
+    el.value = result.toFixed(2);
+    calcLogistics();
+  } catch(e) {
+    alert('格式错误，请用 10+5.5+3 这样的格式');
+  }
+}
+
 function calcPeerSum() {
   const el = document.getElementById('lg_peer');
   const expr = el.value.trim();
@@ -727,7 +751,11 @@ function calcLogistics() {
   const price = parseFloat(document.getElementById('lg_price').value) || 0;
   let qty = 0;
   if (mode === 'weight') {
-    const total = parseFloat(document.getElementById('lg_total').value) || 0;
+    let totalVal = document.getElementById('lg_total').value || '0';
+  if (/[+\-]/.test(totalVal) && totalVal.length > 1) {
+    try { totalVal = Function('"use strict";return(' + totalVal + ')')(); } catch(e) { totalVal = 0; }
+  }
+  const total = parseFloat(totalVal) || 0;
     const peer = parseFloat(document.getElementById('lg_peer').value) || 0;
     qty = Math.max(0, total - peer);
     document.getElementById('lg_actual').value = qty.toFixed(2);
@@ -788,7 +816,11 @@ async function saveLogistics() {
   let desc = '';
 
   if (mode === 'weight') {
-    const total = parseFloat(document.getElementById('lg_total').value) || 0;
+    let totalVal = document.getElementById('lg_total').value || '0';
+  if (/[+\-]/.test(totalVal) && totalVal.length > 1) {
+    try { totalVal = Function('"use strict";return(' + totalVal + ')')(); } catch(e) { totalVal = 0; }
+  }
+  const total = parseFloat(totalVal) || 0;
     const peer = parseFloat(document.getElementById('lg_peer').value) || 0;
     const actual = parseFloat(document.getElementById('lg_actual').value) || 0;
     if (!date || actual <= 0 || price <= 0) { alert('请填写日期、重量和单价'); return; }
