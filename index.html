@@ -615,6 +615,11 @@ function canAdjustInv() {
 }
 
 function formatMoney(n) { return n==null||isNaN(n)?'-':'¥'+Number(n).toLocaleString('zh-CN',{minimumFractionDigits:2,maximumFractionDigits:2}); }
+function formatAmt(n, cur) { 
+  if (n==null||isNaN(n)) return '-';
+  const num = Number(n).toLocaleString('zh-CN',{minimumFractionDigits:2,maximumFractionDigits:2});
+  return cur && cur !== 'CNY' ? num + ' ' + cur : '¥' + num;
+}
 function today() { 
   // 中国时间 UTC+8
   const d = new Date(Date.now() + 8 * 60 * 60 * 1000);
@@ -807,7 +812,7 @@ function renderCustomModuleRecords(moduleId, isAdmin) {
       <td>${t.date}</td>
       <td><span class="badge ${t.type==='收入'?'badge-income':'badge-expense'}">${t.type}</span></td>
       <td style="font-size:12px">${t.desc.replace('[CM:'+moduleId+'] ','')}</td>
-      <td class="${t.type==='收入'?'positive':'negative'}">${formatMoney(t.amount)}</td>
+      <td class="${t.type==='收入'?'positive':'negative'}">${formatAmt(t.amount, t.currency)}</td>
       ${isAdmin?`<td>
         <button class="btn btn-sm" onclick="editTx('${t.id}')">改</button>
         <button class="btn btn-sm btn-danger" onclick="deleteTx('${t.id}')">撤</button>
@@ -1107,7 +1112,7 @@ function renderTobaccoRecords() {
     <tbody>${list.map(t => `<tr>
       <td>${t.date}</td>
       <td style="font-size:12px">${t.desc}</td>
-      <td class="${t.type==='收入'?'positive':'negative'}">${formatMoney(t.amount)}</td>
+      <td class="${t.type==='收入'?'positive':'negative'}">${formatAmt(t.amount, t.currency)}</td>
       ${isAdmin?`<td>
         <button class="btn btn-sm" onclick="editTx('${t.id}')">改</button>
         <button class="btn btn-sm btn-danger" onclick="deleteTx('${t.id}')">撤</button>
@@ -1357,7 +1362,7 @@ function renderRecentLogistics() {
     <tbody>${list.map(t => `<tr>
       <td>${t.date}</td>
       <td style="font-size:12px">${t.desc}</td>
-      <td class="negative">${formatMoney(t.amount)}</td>
+      <td class="negative">${formatAmt(t.amount, t.currency)}</td>
       ${currentUser && currentUser.role==='admin' ? `<td>
         <button class="btn btn-sm" onclick="editLogistics('${t.id}')">改</button>
         <button class="btn btn-sm btn-danger" onclick="deleteTx('${t.id}')">撤单</button>
@@ -1530,7 +1535,7 @@ function renderRecentExchange() {
         <td>${t.date}</td>
         <td><span class="segment-tag" style="background:${seg.color}22;color:${seg.color}">${seg.short}</span></td>
         <td>${t.desc}</td>
-        <td class="${profit>=0?'positive':'negative'}">${formatMoney(profit)}</td>
+        <td class="${profit>=0?'positive':'negative'}">${formatAmt(profit, 'CNY')}</td>
       </tr>`;
     }).join('')}</tbody>
   </table></div>`;
@@ -1845,7 +1850,7 @@ function renderLedger() {
       return `<tr style="${rowStyle}"><td>${t.date}</td><td><span class="segment-tag" style="background:${seg.color}22;color:${seg.color}">${seg.short}</span></td>
         <td><span class="badge ${t.type==='收入'?'badge-income':'badge-expense'}">${t.type}</span></td>
         <td>${isPending?'<span style="color:#C0392B">[待审]</span> ':''}${t.desc||t.category}</td><td>${t.amount} ${t.currency}</td>
-        <td class="${t.type==='收入'?'positive':'negative'}">${isCancelled?'<span style="color:#C0392B">已撤单</span>':formatMoney(rmb)}</td>
+        <td class="${t.type==='收入'?'positive':'negative'}">${isCancelled?'<span style="color:#C0392B">已撤单</span>':formatAmt(t.amount, t.currency)}</td>
         <td>
           ${currentUser && currentUser.role==='admin' 
             ? `<button class="btn btn-sm" onclick="editTx('${t.id}')">改</button>
