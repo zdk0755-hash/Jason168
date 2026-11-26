@@ -396,6 +396,7 @@ async function init() {
     loadDeletedModules();
     loadTobaccoInv();
     loadTobaccoCost();
+    loadTobaccoOrder();
   } catch(e) {
     showError(e.message);
     setStatus('连接失败');
@@ -1005,6 +1006,19 @@ async function loadTobaccoCost() {
   } catch(e) {}
 }
 
+
+async function loadTobaccoOrder() {
+  try {
+    const data = await sbFetch('app_settings?Key=eq.tobacco_order&select=value');
+    if (data && data.length && data[0].value) {
+      const parsed = typeof data[0].value === 'string' ? JSON.parse(data[0].value) : data[0].value;
+      if (Array.isArray(parsed) && parsed.length) {
+        localStorage.setItem('tobacco_order', JSON.stringify(parsed));
+      }
+    }
+  } catch(e) {}
+}
+
 async function loadTobaccoInv() {
   try {
     const data = await sbFetch('app_settings?Key=eq.tobacco_inv&select=value');
@@ -1015,6 +1029,16 @@ async function loadTobaccoInv() {
       }
     }
   } catch(e) {}
+}
+
+
+function getTobaccoOrder() {
+  const saved = localStorage.getItem('tobacco_order');
+  return saved ? JSON.parse(saved) : [];
+}
+function saveTobaccoOrder(order) {
+  localStorage.setItem('tobacco_order', JSON.stringify(order));
+  saveSetting('tobacco_order', order);
 }
 
 function getTobaccoInv() {
@@ -1036,7 +1060,18 @@ function renderTobacco() {
     <h2>烟酒槟榔</h2>
     <div style="background:#F5EEF8;padding:12px;border-radius:8px;margin-bottom:12px">
       <div style="font-size:13px;font-weight:600;color:#8E44AD;margin-bottom:8px">当前库存</div>
-      ${products.length ? products.map(p => `<span style="display:inline-block;background:#E8DAEF;padding:4px 10px;border-radius:4px;margin:2px;font-size:13px">${p}: <b>${inv[p]}</b></span>`).join('') : '<span style="color:#7F8C8D">暂无库存</span>'}
+      <div id="invSortable" style="display:flex;flex-wrap:wrap;gap:4px">${(() => {
+        const order = getTobaccoOrder();
+        const visible = products.filter(p => inv[p] > 0);
+        visible.sort((a,b) => {
+          const ai = order.indexOf(a), bi = order.indexOf(b);
+          if (ai === -1 && bi === -1) return 0;
+          if (ai === -1) return 1;
+          if (bi === -1) return -1;
+          return ai - bi;
+        });
+        return visible.length ? visible.map(p => `<span draggable="true" data-name="${p}" ondragstart="dragStart(event)" ondragover="dragOver(event)" ondrop="dragDrop(event)" style="display:inline-block;background:#E8DAEF;padding:4px 10px;border-radius:4px;font-size:13px;cursor:grab">${p}: <b>${inv[p]}</b></span>`).join('') : '<span style="color:#7F8C8D">暂无库存</span>';
+      })()}</div>
     </div>
     
     <div class="form-row">
@@ -1096,6 +1131,36 @@ function autoFillCost() {
   } else {
     costEl.style.background = '';
   }
+}
+
+
+let dragItem = null;
+function dragStart(e) {
+  dragItem = e.target;
+  e.target.style.opacity = '0.5';
+}
+function dragOver(e) {
+  e.preventDefault();
+  e.target.style.borderLeft = '2px solid #8E44AD';
+}
+function dragDrop(e) {
+  e.preventDefault();
+  if (!dragItem || dragItem === e.target) return;
+  const container = document.getElementById('invSortable');
+  const items = [...container.querySelectorAll('[draggable]')];
+  const fromIdx = items.indexOf(dragItem);
+  const toIdx = items.indexOf(e.target);
+  if (fromIdx < toIdx) {
+    e.target.after(dragItem);
+  } else {
+    e.target.before(dragItem);
+  }
+  dragItem.style.opacity = '1';
+  items.forEach(i => i.style.borderLeft = '');
+  // 保存新顺序
+  const newOrder = [...container.querySelectorAll('[draggable]')].map(el => el.dataset.name);
+  saveTobaccoOrder(newOrder);
+  dragItem = null;
 }
 
 function toggleTobaccoFields() {
@@ -2518,7 +2583,8 @@ if(currentUser) { applyRoleUI();
     loadCustomModules();
     loadDeletedModules();
     loadTobaccoInv();
-    loadTobaccoCost(); init(); }
+    loadTobaccoCost();
+    loadTobaccoOrder(); init(); }
 </script>
 </body>
 </html>
