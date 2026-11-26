@@ -1840,7 +1840,7 @@ function renderLedger() {
         <option value="支出">只看支出</option>
       </select>
     </div>
-    <div style="overflow-x:auto"><table><thead><tr><th>日期</th><th>板块</th><th>操作人</th><th>类型</th><th>摘要</th><th>金额</th><th>人民币</th><th>操作</th></tr></thead>
+    <div style="overflow-x:auto"><table><thead><tr><th>日期</th><th>板块</th><th>操作人</th><th>类型</th><th>摘要</th><th>金额</th><th>操作</th></tr></thead>
     <tbody>${list.map(t=>{
       const seg = getSegment(t.segment);
       const rmb = toRMB(t.amount, t.currency);
@@ -1849,7 +1849,7 @@ function renderLedger() {
       const rowStyle = isCancelled ? 'opacity:0.5' : (isPending ? 'background:#FDEDEC;color:#C0392B;font-weight:600' : '');
       return `<tr style="${rowStyle}"><td>${t.date}</td><td><span class="segment-tag" style="background:${seg.color}22;color:${seg.color}">${seg.short}</span></td>
         <td><span class="badge ${t.type==='收入'?'badge-income':'badge-expense'}">${t.type}</span></td>
-        <td>${isPending?'<span style="color:#C0392B">[待审]</span> ':''}${t.desc||t.category}</td><td>${t.amount} ${t.currency}</td>
+        <td>${isPending?'<span style="color:#C0392B">[待审]</span> ':''}${t.desc||t.category}</td>
         <td class="${t.type==='收入'?'positive':'negative'}">${isCancelled?'<span style="color:#C0392B">已撤单</span>':formatAmt(t.amount, t.currency)}</td>
         <td>
           ${currentUser && currentUser.role==='admin' 
